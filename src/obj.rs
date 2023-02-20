@@ -38,6 +38,7 @@ struct ObjCons {
 }
 
 #[repr(C)]
+#[derive(Clone, Debug)]
 pub struct OpaqueValue(Value);
 
 impl OpaqueValue {
@@ -70,20 +71,23 @@ impl OpaqueValue {
     }
 }
 
+
+#[derive(Debug)]
 pub struct OpaqueValueCons(*mut ObjCons);
 
 impl OpaqueValueCons {
-    fn get_car(&self) -> OpaqueValue {
+    pub fn get_car(&self) -> OpaqueValue {
         OpaqueValue(unsafe {(*self.0).car})
     }
-    fn get_cdr(&self) -> OpaqueValue {
+    pub fn get_cdr(&self) -> OpaqueValue {
         OpaqueValue(unsafe {(*self.0).cdr})
     }
 }
+#[derive(Debug)]
 pub struct OpaqueValueSymbol(*mut ObjSymbol);
 
 impl OpaqueValueSymbol {
-    fn get_string(&self) -> String {
+    pub fn get_string(&self) -> String {
         let len = unsafe {(*self.0).head.value} as usize;
         let slice = unsafe {
             std::slice::from_raw_parts((self.0 as *mut u8).add(size_of::<ObjSymbol>()), len)
@@ -96,6 +100,7 @@ impl OpaqueValueSymbol {
     }
 }
 
+#[derive(Debug)]
 pub enum Obj {
     Nil,
     I32(i32),
@@ -150,51 +155,55 @@ impl ObjPool {
     }
 }
 
-#[test]
-fn can_get_i32() {
-    let pool = ObjPool::new(100);
-    let value = pool.get_i32(42);
-    if let Obj::I32(42) = value.get_obj() {
-    } else {
-        panic!("unexpected")
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn can_get_i32() {
+        let pool = ObjPool::new(100);
+        let value = pool.get_i32(42);
+        if let Obj::I32(42) = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
     }
-}
-#[test]
-fn can_get_nil() {
-    let pool = ObjPool::new(100);
-    let value = pool.get_nil();
-    if let Obj::Nil = value.get_obj() {
-    } else {
-        panic!("unexpected")
+    #[test]
+    fn can_get_nil() {
+        let pool = ObjPool::new(100);
+        let value = pool.get_nil();
+        if let Obj::Nil = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
     }
-}
-#[test]
-fn can_alloc_string() {
-    let mut pool = ObjPool::new(100);
-    let value = pool.alloc_symbol("test").unwrap();
-    if let Obj::Symbol(symbol) = value.get_obj() {
-        assert_eq!(symbol.get_string(), "test".to_string())
-    } else {
-        panic!("unexpected")
-    }
-}
-#[test]
-fn can_alloc_cons() {
-    let mut pool = ObjPool::new(100);
-    let nil = pool.get_nil();
-    let str = pool.alloc_symbol("test").unwrap();
-    let value = pool.alloc_cons(str, nil).unwrap();
-    if let Obj::Cons(cons) = value.get_obj() {
-        if let Obj::Symbol(symbol) = cons.get_car().get_obj() {
+    #[test]
+    fn can_alloc_string() {
+        let mut pool = ObjPool::new(100);
+        let value = pool.alloc_symbol("test").unwrap();
+        if let Obj::Symbol(symbol) = value.get_obj() {
             assert_eq!(symbol.get_string(), "test".to_string())
         } else {
             panic!("unexpected")
         }
-        if let Obj::Nil = cons.get_cdr().get_obj() {
+    }
+    #[test]
+    fn can_alloc_cons() {
+        let mut pool = ObjPool::new(100);
+        let nil = pool.get_nil();
+        let str = pool.alloc_symbol("test").unwrap();
+        let value = pool.alloc_cons(str, nil).unwrap();
+        if let Obj::Cons(cons) = value.get_obj() {
+            if let Obj::Symbol(symbol) = cons.get_car().get_obj() {
+                assert_eq!(symbol.get_string(), "test".to_string())
+            } else {
+                panic!("unexpected")
+            }
+            if let Obj::Nil = cons.get_cdr().get_obj() {
+            } else {
+                panic!("unexpected")
+            }
         } else {
             panic!("unexpected")
         }
-    } else {
-        panic!("unexpected")
     }
 }
