@@ -33,8 +33,8 @@ struct ObjSymbol {
 #[repr(C)]
 struct ObjCons {
     head: ObjHead,
-    car: u64,
-    cdr: u64,
+    car: Value,
+    cdr: Value,
 }
 
 #[repr(C)]
@@ -110,9 +110,6 @@ impl ObjPool {
             ptr,
             end: unsafe { ptr.add(size) },
         }
-    }
-    unsafe fn alloc_head(&mut self, value: u32, obj_type: ObjType) -> Result<*mut ObjHead> {
-        self.alloc(size_of::<ObjHead>(), value, obj_type)
     }
     unsafe fn alloc(&mut self, size: usize, value: u32, obj_type: ObjType) -> Result<* mut ObjHead> {
         let size = (size + 1) / 2 * 2;
