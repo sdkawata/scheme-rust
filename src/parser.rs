@@ -9,7 +9,7 @@ peg::parser!{
         rule _ -> () = [' ' | '\r' | '\n']* {()}
         rule __ -> () = [' ' | '\r' | '\n']+ {()}
         rule list(pool: &mut ObjPool)  -> Result<OpaqueValue> 
-            = "(" l:(value(pool) ** __) ")" {
+            = "(" _ l:(value(pool) ** __) _ ")" {
                 let mut reversed = VecDeque::<OpaqueValue>::new();
                 for v in l {
                     reversed.push_front(v?)
@@ -21,7 +21,7 @@ peg::parser!{
                 Ok(res)
             }
         rule symbol(pool: &mut ObjPool) -> Result<OpaqueValue>
-            = s:$(['a'..='z']+) {Ok(pool.alloc_symbol(s)?)}
+            = s:$(['a'..='z' | '+']+) {Ok(pool.get_symbol(s)?)}
         rule value(pool: &mut ObjPool) -> Result<OpaqueValue>
             = n:(number(pool) / list(pool) / symbol(pool)) {n}
         pub rule top(pool: &mut ObjPool) -> Result<OpaqueValue>
@@ -58,22 +58,21 @@ mod tests {
     }
     #[test]
     fn parse_symbol() {
-        let mut obj = ObjPool::new(100);
-        let value = parse("if", &mut obj).unwrap();
-        if let Obj::Symbol(symbol) = value.get_obj() {
-            assert_eq!("if", symbol.get_string())
+        let mut pool = ObjPool::new(100);
+        let value = parse("if", &mut pool).unwrap();
+        if let Obj::Symbol(sym_idx) = value.get_obj() {
+            assert_eq!("if", pool.get_symbol_str(sym_idx))
         } else {
             panic!("unexpected")
         }
     }
     #[test]
     fn parse_list() {
-        let mut obj = ObjPool::new(100);
-        let value = parse("(if 2)", &mut obj).unwrap();
+        let mut pool = ObjPool::new(100);
+        let value = parse("(if 2)", &mut pool).unwrap();
         if let Obj::Cons(cons) = value.get_obj() {
-            println!("{:?}", cons.get_car().get_obj());
-            if let Obj::Symbol(symbol) = cons.get_car().get_obj() {  
-                assert_eq!("if", symbol.get_string())
+            if let Obj::Symbol(sym_idx) = cons.get_car().get_obj() {  
+                assert_eq!("if", pool.get_symbol_str(sym_idx))
             } else {panic!("unexpected")}
             if let Obj::Cons(cons2) = cons.get_cdr().get_obj() {  
                 if let Obj::I32(2) = cons2.get_car().get_obj() {} else {panic!("unexpected")}
