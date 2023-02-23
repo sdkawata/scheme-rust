@@ -25,7 +25,7 @@ peg::parser!{
                 Ok(res)
             }
         rule symbol(pool: &mut ObjPool) -> Result<OpaqueValue>
-            = s:$(['a'..='z' | '+']+) {Ok(pool.get_symbol(s)?)}
+            = s:$(['a'..='z' | '+' | '=']+) {Ok(pool.get_symbol(s)?)}
         rule value(pool: &mut ObjPool) -> Result<OpaqueValue>
             = n:(number(pool) / list(pool) / symbol(pool) / true_value(pool) / false_value(pool)) {n}
         pub rule top(pool: &mut ObjPool) -> Result<OpaqueValue>

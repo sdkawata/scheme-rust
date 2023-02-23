@@ -171,6 +171,24 @@ fn native_plus(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue>
     Ok(result)
 }
 
+fn native_eq(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    if list_length(&v).ok_or(anyhow!("= error: args not list"))? < 2 {
+        return Err(anyhow!("= error: length < 2"))
+    }
+    let head = list_nth(&v, 0).unwrap();
+    for tail in list_iterator(v).skip(1) {
+        match (head.get_obj(), tail.unwrap().get_obj()) {
+            (Obj::I32(i), Obj::I32(j)) => {
+                if i != j {
+                    return Ok(evaluator.env.pool.get_false())
+                }
+            }
+            _ => {return Err(anyhow!("= error:cannot compare"))}
+        }
+    }
+    Ok(evaluator.env.pool.get_true())
+}
+
 struct CallStack {
     ret_func_id: usize,
     ret_ip: usize,
@@ -245,6 +263,7 @@ impl<'a> Evaluator<'a> {
     }
     fn register_native_funcs(&mut self) -> Result<()> {
         self.register_native_func("+", native_plus)?;
+        self.register_native_func("=", native_eq)?;
         self.create_new_frame()
     }
     fn push_stack(&mut self, v: OpaqueValue) {
