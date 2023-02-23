@@ -6,6 +6,10 @@ peg::parser!{
     grammar scheme_parser() for str {
         rule number(pool: &mut ObjPool) -> Result<OpaqueValue>
             = n:$(['1'..='9'] ['0'..='9']*) { Ok(pool.get_i32(n.parse()?))}
+        rule true_value(pool: &mut ObjPool) -> Result<OpaqueValue>
+            = "#t" {Ok(pool.get_true())}
+        rule false_value(pool: &mut ObjPool) -> Result<OpaqueValue>
+            = "#f" {Ok(pool.get_false())}
         rule _ -> () = [' ' | '\r' | '\n']* {()}
         rule __ -> () = [' ' | '\r' | '\n']+ {()}
         rule list(pool: &mut ObjPool)  -> Result<OpaqueValue> 
@@ -23,7 +27,7 @@ peg::parser!{
         rule symbol(pool: &mut ObjPool) -> Result<OpaqueValue>
             = s:$(['a'..='z' | '+']+) {Ok(pool.get_symbol(s)?)}
         rule value(pool: &mut ObjPool) -> Result<OpaqueValue>
-            = n:(number(pool) / list(pool) / symbol(pool)) {n}
+            = n:(number(pool) / list(pool) / symbol(pool) / true_value(pool) / false_value(pool)) {n}
         pub rule top(pool: &mut ObjPool) -> Result<OpaqueValue>
             = _ n:value(pool) _ {n}
     }
@@ -43,6 +47,23 @@ mod tests {
         let mut obj = ObjPool::new(100);
         let value = parse("42", &mut obj).unwrap();
         if let Obj::I32(42) = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
+    }
+    #[test]
+    fn parse_true() {
+        let mut obj = ObjPool::new(100);
+        let value = parse("#t", &mut obj).unwrap();
+        if let Obj::True = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
+    }#[test]
+    fn parse_false() {
+        let mut obj = ObjPool::new(100);
+        let value = parse("#f", &mut obj).unwrap();
+        if let Obj::False = value.get_obj() {
         } else {
             panic!("unexpected")
         }

@@ -25,6 +25,9 @@ enum ObjType {
 enum ValueType {
     Nil,
     I32,
+    True,
+    False,
+    Undef,
     Symbol,
     Native,
 }
@@ -77,6 +80,12 @@ impl OpaqueValue {
                 Obj::Symbol(value)
             } else if value_type == ValueType::Native as u64 {
                 Obj::Native(value)
+            } else if value_type == ValueType::True as u64 {
+                Obj::True
+            } else if value_type == ValueType::False as u64 {
+                Obj::False
+            } else if value_type == ValueType::Undef as u64 {
+                Obj::Undef
             } else {
                 panic!("unexpected value type {}", value_type)
             }
@@ -122,6 +131,9 @@ impl OpaqueValueClosure {
 #[derive(Debug, Clone)]
 pub enum Obj {
     Nil,
+    True,
+    False,
+    Undef,
     I32(i32),
     Native(NativeId),
     Symbol(SymbolId),
@@ -170,6 +182,15 @@ impl ObjPool {
     pub fn get_nil(&self) -> OpaqueValue {
         OpaqueValue::from_value(0, ValueType::Nil)
     }
+    pub fn get_true(&self) -> OpaqueValue {
+        OpaqueValue::from_value(0, ValueType::True)
+    }
+    pub fn get_false(&self) -> OpaqueValue {
+        OpaqueValue::from_value(0, ValueType::False)
+    }
+    pub fn get_undef(&self) -> OpaqueValue {
+        OpaqueValue::from_value(0, ValueType::Undef)
+    }
     pub fn get_symbol_str(&self, idx: SymbolId) -> String {
         self.symbols[idx as usize].to_owned()
     }
@@ -216,6 +237,9 @@ impl ObjPool {
     pub fn write<W:Write>(&self, w: &mut W, v: &OpaqueValue) -> Result<()> {
         match v.get_obj() {
             Obj::Nil => {write!(w, "()")?;}
+            Obj::True => {write!(w, "#t")?;}
+            Obj::False => {write!(w, "#f")?;}
+            Obj::Undef => {write!(w, "#undef")?;}
             Obj::I32(i) => {write!(w, "{}",i)?;}
             Obj::Native(i) => {write!(w, "#native:{}#", i)?;}
             Obj::Symbol(s) => {write!(w, "{}", self.get_symbol_str(s))?;}
@@ -253,6 +277,9 @@ impl ObjPool {
 
 pub fn equal(v1: &OpaqueValue, v2: &OpaqueValue) -> bool {
     match (v1.get_obj(), v2.get_obj()) {
+        (Obj::True, Obj::True) => true,
+        (Obj::False, Obj::False) => true,
+        (Obj::Undef, Obj::Undef) => true,
         (Obj::I32(i1), Obj::I32(i2)) => i1 == i2,
         (Obj::Nil, Obj::Nil) => true,
         (Obj::Symbol(s1), Obj::Symbol(s2)) => s1 == s2,
@@ -332,6 +359,31 @@ mod tests {
         let pool = ObjPool::new(100);
         let value = pool.get_nil();
         if let Obj::Nil = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
+    }
+    #[test]
+    fn can_get_true() {
+        let pool = ObjPool::new(100);
+        let value = pool.get_true();
+        if let Obj::True = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
+    }#[test]
+    fn can_get_false() {
+        let pool = ObjPool::new(100);
+        let value = pool.get_false();
+        if let Obj::False = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
+    }#[test]
+    fn can_get_undef() {
+        let pool = ObjPool::new(100);
+        let value = pool.get_undef();
+        if let Obj::Undef = value.get_obj() {
         } else {
             panic!("unexpected")
         }

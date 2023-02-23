@@ -4,6 +4,9 @@ use anyhow::{Result, anyhow};
 #[derive(Debug)]
 enum OpCode {
     PushI32(i32), // stack: -> I32,
+    PushTrue, // stack -> true
+    PushFalse, // stack -> false
+    PushUndef, // stack -> undef
     PushNil, // stack: -> nil
     LookUp(SymbolId), // stack: -> Value
     PushNewVar(SymbolId), // stack: Value ->
@@ -72,6 +75,14 @@ impl Environment {
             },
             Obj::Symbol(s) => {
                 opcodes.push(OpCode::LookUp(s));
+                Ok(())
+            },
+            Obj::True => {
+                opcodes.push(OpCode::PushTrue);
+                Ok(())
+            },
+            Obj::False => {
+                opcodes.push(OpCode::PushFalse);
                 Ok(())
             },
             Obj::Cons(cons) => {
@@ -266,7 +277,16 @@ impl<'a> Evaluator<'a> {
                 },
                 OpCode::PushNil => {
                     evaluator.push_stack(evaluator.env.pool.get_nil())
-                }
+                },
+                OpCode::PushTrue => {
+                    evaluator.push_stack(evaluator.env.pool.get_true())
+                },
+                OpCode::PushFalse => {
+                    evaluator.push_stack(evaluator.env.pool.get_false())
+                },
+                OpCode::PushUndef => {
+                    evaluator.push_stack(evaluator.env.pool.get_undef())
+                },
                 OpCode::LookUp(s) => {
                     // eprintln!("{}", evaluator.env.pool.write_to_string(&evaluator.current_env));
                     let value = evaluator.lookup(s).ok_or(anyhow!("undefined symbol"))?;
