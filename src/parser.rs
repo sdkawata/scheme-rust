@@ -5,15 +5,14 @@ use crate::obj::{ObjPool,OpaqueValue};
 peg::parser!{
     grammar scheme_parser() for str {
         rule number(pool: &mut ObjPool) -> Result<OpaqueValue>
-            = n:$(['1'..='9'] ['0'..='9']*) { Ok(pool.get_i32(n.parse()?))}
+            = n:$(['0'..='9'] ['0'..='9']*) { Ok(pool.get_i32(n.parse()?))}
         rule true_value(pool: &mut ObjPool) -> Result<OpaqueValue>
             = "#t" {Ok(pool.get_true())}
         rule false_value(pool: &mut ObjPool) -> Result<OpaqueValue>
             = "#f" {Ok(pool.get_false())}
         rule _ -> () = [' ' | '\r' | '\n']* {()}
-        rule __ -> () = [' ' | '\r' | '\n']+ {()}
         rule list(pool: &mut ObjPool)  -> Result<OpaqueValue> 
-            = "(" _ l:(value(pool) ** __) _ ")" {
+            = "(" _ l:(value(pool) ** _) _ ")" {
                 let mut reversed = VecDeque::<OpaqueValue>::new();
                 for v in l {
                     reversed.push_front(v?)

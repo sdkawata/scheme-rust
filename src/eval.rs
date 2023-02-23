@@ -11,7 +11,8 @@ enum OpCode {
     PushNil, // stack: -> nil
     LookUp(SymbolId), // stack: -> value
     AddNewVar(SymbolId), // stack: frame value -> frame
-    AddNewVarCurrent(SymbolId), // stack: frame value -> frame
+    AddNewVarCurrent(SymbolId), // stack: value ->
+    SetVarCurrent(SymbolId), // stack: value ->
     PushNewFrame, // stack: -> frame
     PopAndSetFrame, // stack: frame ->
     SetFramePrevious,
@@ -33,6 +34,21 @@ pub struct Environment {
     pool: ObjPool,
     funcs: Vec<Func>,
     consts: Vec<OpaqueValue>,
+}
+
+fn bind_pair_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<(SymbolId, OpaqueValue)>> {
+    list_iterator(v).map(|bind| {
+        let bind = bind.map_err(|_| anyhow!("bind pair is not list"))?;
+        if list_length(&bind) != Some(2) {
+            Err(anyhow!("bind is not list of length 2"))?;
+        }
+        if let Obj::Symbol(s) = list_nth(&bind, 0).unwrap().get_obj() {
+            let value = list_nth(&bind, 1).unwrap();
+            Ok((s, value))
+        } else {
+            Err(anyhow!("bind key is not symbol"))?
+        }
+    })
 }
 
 impl Environment {
@@ -103,20 +119,36 @@ impl Environment {
                         }
                         let binds = list_nth(v, 1).unwrap();
                         opcodes.push(OpCode::PushNewFrame);
-                        for bind in list_iterator(binds) {
-                            let bind = bind?;
-                            if list_length(&bind) != Some(2) {
-                                Err(anyhow!("malformed let: bind is not list of length 2"))?;
-                            }
-                            if let Obj::Symbol(s) = list_nth(&bind, 0).unwrap().get_obj() {
-                                let value = list_nth(&bind, 1).unwrap();
-                                self.emit_rec(opcodes, &value)?;
-                                opcodes.push(OpCode::AddNewVar(s))
-                            } else {
-                                Err(anyhow!("malformed let: bind key is not symbol"))?;
-                            }
+                        for bind in bind_pair_iterator(binds) {
+                            let (symbol_id, expr) = bind.map_err(|e| anyhow!("malformed let:{}", e))?;
+                            self.emit_rec(opcodes, &expr)?;
+                            opcodes.push(OpCode::AddNewVar(symbol_id))
                         }
                         opcodes.push(OpCode::PopAndSetFrame);
+                        // TODO: body have multiple expr
+                        let body = list_nth(v, 2).unwrap();
+                        self.emit_rec(opcodes, &body)?;
+                        opcodes.push(OpCode::SetFramePrevious);
+                        return Ok(());
+                    },
+                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "letrec" => {
+                        let length = list_length(v).ok_or(anyhow!("malformed letrec: not list"))?;
+                        if length < 3 {
+                            Err(anyhow!("malformed letrec: length < 3"))?;
+                        }
+                        let binds = list_nth(v, 1).unwrap();
+                        opcodes.push(OpCode::PushNewFrame);
+                        opcodes.push(OpCode::PopAndSetFrame);
+                        for bind in bind_pair_iterator(binds.clone()) {
+                            let (symbol_id, _) = bind.map_err(|e| anyhow!("malformed letrec:{}", e))?;
+                            opcodes.push(OpCode::PushUndef);
+                            opcodes.push(OpCode::AddNewVarCurrent(symbol_id));
+                        }
+                        for bind in bind_pair_iterator(binds) {
+                            let (symbol_id, expr) = bind.map_err(|e| anyhow!("malformed letrec:{}", e))?;
+                            self.emit_rec(opcodes, &expr)?;
+                            opcodes.push(OpCode::SetVarCurrent(symbol_id));
+                        }
                         // TODO: body have multiple expr
                         let body = list_nth(v, 2).unwrap();
                         self.emit_rec(opcodes, &body)?;
@@ -310,6 +342,26 @@ impl<'a> Evaluator<'a> {
             panic!("unexpected environment format: not cons")
         }
     }
+    fn set_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
+        for frame in list_iterator(frame.clone()) {
+            let frame = frame.unwrap();
+            for pair in list_iterator(frame) {
+                if let Obj::Cons(cons) = pair.unwrap().get_obj() {
+                    if let Obj::Symbol(symbol_id) = cons.get_car().get_obj() {
+                        if symbol_id == s {
+                            cons.set_cdr(v);
+                            return Ok(())
+                        }
+                    } else {
+                        panic!("internal error:unexpected environment format:car of pair is not symbol")
+                    }
+                } else {
+                    panic!("internal error: unexpected environment format: frame is not list")
+                }
+            }
+        }
+        Err(anyhow!("cannot set var: not found"))
+    }
     fn set_frame_previous(&mut self) {
         if let Obj::Cons(cons) = self.current_env.get_obj() {
             let prev_frame = cons.get_car();
@@ -404,6 +456,10 @@ impl<'a> Evaluator<'a> {
                 OpCode::AddNewVarCurrent(s) => {
                     let value = evaluator.pop_stack()?;
                     evaluator.add_new_var(evaluator.current_env.clone(), s, value)?;
+                },
+                OpCode::SetVarCurrent(s) => {
+                    let value = evaluator.pop_stack()?;
+                    evaluator.set_var(evaluator.current_env.clone(), s, value)?;
                 },
                 OpCode::PopAndSetFrame => {
                     let frame = evaluator.pop_stack()?;

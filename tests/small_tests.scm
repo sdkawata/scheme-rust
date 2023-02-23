@@ -19,4 +19,8 @@
     ((cdr '(1 2 3)) (2 3))
     ((null? '()) #t)
     ((null? 1) #f)
+    ((letrec
+        ((sum (lambda (l) (if (null? l) 0 (+ (car l) (sum (cdr l)))))))
+        (sum '(1 2 3)))
+        6)
 )

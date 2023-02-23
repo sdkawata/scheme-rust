@@ -108,6 +108,9 @@ impl OpaqueValueCons {
     pub fn set_car(&self, v: OpaqueValue) {
         unsafe {(*self.0).car = v.0;}
     }
+    pub fn set_cdr(&self, v: OpaqueValue) {
+        unsafe {(*self.0).cdr = v.0;}
+    }
     pub fn get_car(&self) -> OpaqueValue {
         OpaqueValue(unsafe {(*self.0).car})
     }
