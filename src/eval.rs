@@ -1,6 +1,8 @@
 use crate::obj::{ObjPool, OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId};
 use anyhow::{Result, anyhow};
 
+type Addr = usize;
+
 #[derive(Debug)]
 enum OpCode {
     PushI32(i32), // stack: -> I32,
@@ -16,7 +18,10 @@ enum OpCode {
     Call, // stack: func args -> retval
     CarCdr, // stack: cons -> car cdr
     Cons, // stack: car cdr -> cons
-    Ret, // stack: Retval -> 
+    Ret, // stack: Retval ->
+    JmpIfFalse(Addr), // stack: val ->
+    Jmp(Addr), // stack: ->
+    Invalid,
 }
 
 struct Func {
@@ -116,8 +121,8 @@ impl Environment {
                     },
                     Obj::Symbol(s) if self.pool.get_symbol_str(s) == "lambda" => {
                         let length = list_length(v).ok_or(anyhow!("malformed lambda: not list"))?;
-                        if length < 3 {
-                            Err(anyhow!("malformed lambda: length < 3"))?;
+                        if length != 3 {
+                            Err(anyhow!("malformed lambda: length != 3"))?;
                         }
                         let args = list_nth(v, 1).unwrap();
                         let body = list_nth(v, 2).unwrap();
@@ -137,6 +142,25 @@ impl Environment {
                             self.emit_func(opcodes, &body)
                         }?;
                         opcodes.push(OpCode::Closure(func_id as FuncId));
+                        return Ok(())
+                    },
+                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "if" => {
+                        let length = list_length(v).ok_or(anyhow!("malformed if: not list"))?;
+                        if length < 4 {
+                            Err(anyhow!("malformed if: length != 4"))?;
+                        }
+                        let cond = list_nth(v, 1).unwrap();
+                        let true_branch = list_nth(v, 2).unwrap();
+                        let false_branch = list_nth(v, 3).unwrap();
+                        self.emit_rec(opcodes, &cond)?;
+                        let jmp_if_false_addr = opcodes.len();
+                        opcodes.push(OpCode::Invalid);
+                        self.emit_rec(opcodes, &true_branch)?;
+                        let jmp_addr = opcodes.len();
+                        opcodes.push(OpCode::Invalid);
+                        opcodes[jmp_if_false_addr] = OpCode::JmpIfFalse(opcodes.len());
+                        self.emit_rec(opcodes, &false_branch)?;
+                        opcodes[jmp_addr] = OpCode::Jmp(opcodes.len());
                         return Ok(())
                     },
                     _ => {},
@@ -308,7 +332,7 @@ impl<'a> Evaluator<'a> {
                 },
                 OpCode::LookUp(s) => {
                     // eprintln!("{}", evaluator.env.pool.write_to_string(&evaluator.current_env));
-                    let value = evaluator.lookup(s).ok_or(anyhow!("undefined symbol"))?;
+                    let value = evaluator.lookup(s).ok_or(anyhow!("undefined symbol: {}", evaluator.env.pool.get_symbol_str(s)))?;
                     evaluator.push_stack(value)
                 },
                 OpCode::PushNewVar(s) => {
@@ -383,6 +407,20 @@ impl<'a> Evaluator<'a> {
                         return Ok(retval);
                     }
 
+                },
+                OpCode::JmpIfFalse(addr) => {
+                    let cond = evaluator.pop_stack()?;
+                    if let Obj::False = cond.get_obj() {
+                        evaluator.current_ip = addr;
+                        continue;
+                    }
+                },
+                OpCode::Jmp(addr) => {
+                    evaluator.current_ip = addr;
+                    continue;
+                },
+                OpCode::Invalid => {
+                    return Err(anyhow!("internal error: encounter invalid opcode"))
                 }
             }
             evaluator.current_ip+=1;
@@ -396,6 +434,20 @@ mod tests {
     use std::path::PathBuf;
     use crate::parser;
     use crate::obj;
+    use anyhow::Result;
+
+    fn assert_evaluated_to(env: &mut Environment, expr: OpaqueValue, expected: OpaqueValue) -> Result<()> {
+        let func_id = env.emit(&expr).unwrap();
+        let result = Evaluator::eval(env, func_id)?;
+        assert!(
+            obj::equal(&result, &expected),
+            "{} evaluated to {} expected {}",
+            env.get_pool().write_to_string(&expr),
+            env.get_pool().write_to_string(&result),
+            env.get_pool().write_to_string(&expected),
+        );
+        Ok(())
+    }
 
     #[test]
     fn run_small_tests() {
@@ -405,19 +457,13 @@ mod tests {
         let mut env = Environment::new();
         let v = parser::parse(&tests, env.get_pool()).unwrap();
         for result in crate::obj::list_iterator(v) {
-            let v = result.unwrap();
-            let expr = obj::list_nth(&v, 0).unwrap();
+            let pair = result.unwrap();
+            let expr = obj::list_nth(&pair, 0).unwrap();
             // println!("evaluating {}", env.get_pool().write_to_string(&expr));
-            let expected = obj::list_nth(&v, 1).unwrap();
-            let func_id = env.emit(&expr).unwrap();
-            let result = Evaluator::eval(&mut env, func_id).unwrap();
-            assert!(
-                obj::equal(&result, &expected),
-                "{} evaluated to {} expected {}",
-                env.get_pool().write_to_string(&expr),
-                env.get_pool().write_to_string(&result),
-                env.get_pool().write_to_string(&expected),
-            );
+            let expected = obj::list_nth(&pair, 1).unwrap();
+            assert_evaluated_to(&mut env, expr.clone(), expected.clone()).map_err(|err|
+                anyhow!("error evaluating {}:{}", env.pool.write_to_string(&expr), err)
+            ).unwrap();
         }
     }
 }
