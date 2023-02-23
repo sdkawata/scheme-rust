@@ -1,17 +1,9 @@
 use std::collections::HashMap;
 use std::alloc::{GlobalAlloc, System, Layout};
 use std::fmt::Write;
+use std::ptr::NonNull;
 use anyhow::{Result, anyhow};
 use std::mem::size_of;
-
-pub struct ObjPool {
-    layout: Layout,
-    alloced: *mut u8,
-    ptr: *mut u8,
-    end: *mut u8,
-    symbols: Vec<String>,
-    symbols_map: HashMap<String, SymbolId>,
-}
 
 #[repr(C)]
 #[derive(Clone,Copy)]
@@ -144,32 +136,101 @@ pub enum Obj {
     Closure(OpaqueValueClosure),
 }
 
+pub struct ObjPool {
+    layout: Layout,
+    alloced: *mut u8,
+    current: *mut u8,
+    from_space: *mut u8,
+    to_space: *mut u8,
+    pool_size: usize,
+    symbols: Vec<String>,
+    symbols_map: HashMap<String, SymbolId>,
+    head_entry: NonNull<PtrNode>,
+    tail_entry: NonNull<PtrNode>,
+}
+
+
 impl Drop for ObjPool {
     fn drop(&mut self) {
         unsafe {System.dealloc(self.alloced, self.layout)}
     }
 }
 
+struct PtrNode {
+    next: Option<NonNull<PtrNode>>,
+    prev: Option<NonNull<PtrNode>>,
+    element: Value,
+}
+
+impl PtrNode {
+    fn new_ptr(value: OpaqueValue) -> NonNull<PtrNode> {
+        Box::leak(
+            Box::new(
+                PtrNode {
+                    prev: None,
+                    next: None,
+                    element: value.0,
+                }
+            )
+        ).into()
+    }
+}
+
+pub struct Ptr(NonNull<PtrNode>);
+
+impl Ptr {
+    pub fn get_value(&self) -> OpaqueValue {
+        OpaqueValue(unsafe {(*self.0.as_ptr()).element} )
+    }
+}
+
+impl Drop for Ptr {
+    fn drop(&mut self) {
+        // TODO
+    }
+}
+
 impl ObjPool {
     pub fn new(size: usize) -> Self {
-        let layout = Layout::from_size_align(size, 8).unwrap();
+        let layout = Layout::from_size_align(size * 2, 8).unwrap();
         let ptr = unsafe { System.alloc(layout)};
+        let head_entry: NonNull<PtrNode> = PtrNode::new_ptr(OpaqueValue::from_value(0, ValueType::Nil));
+        let tail_entry: NonNull<PtrNode> = PtrNode::new_ptr(OpaqueValue::from_value(0, ValueType::Nil));
+        unsafe {
+            (*head_entry.as_ptr()).next = Some(tail_entry);
+            (*tail_entry.as_ptr()).prev = Some(head_entry);
+        }
         Self {
             layout,
             alloced: ptr,
-            ptr,
-            end: unsafe { ptr.add(size) },
+            current: ptr,
+            from_space: ptr,
+            to_space: unsafe { ptr.add(size)},
+            pool_size: size,
             symbols: Vec::new(),
             symbols_map: HashMap::new(),
+            head_entry,
+            tail_entry,
         }
+    }
+    pub fn ptr(&mut self, value: OpaqueValue) -> Ptr {
+        let new_entry = PtrNode::new_ptr(value);
+        unsafe {
+            let second_last_entry = (*self.tail_entry.as_ptr()).prev.unwrap();
+            (*new_entry.as_ptr()).prev = Some(second_last_entry);
+            (*new_entry.as_ptr()).next = Some(self.tail_entry);
+            (*self.tail_entry.as_ptr()).prev = Some(new_entry);
+            (*second_last_entry.as_ptr()).next = Some(new_entry);
+        }
+        Ptr(new_entry as NonNull<PtrNode>)
     }
     unsafe fn alloc(&mut self, size: usize, value: u32, obj_type: ObjType) -> Result<* mut ObjHead> {
         let size = (size + 1) / 2 * 2;
-        if self.ptr.add(size) >= self.end {
+        if self.current.add(size) >= self.from_space.add(self.pool_size) {
             return Err(anyhow!("no space left in pool"));
         }
-        let ptr = self.ptr as *mut ObjHead;
-        self.ptr = unsafe {self.ptr.add(size)};
+        let ptr = self.current as *mut ObjHead;
+        self.current = unsafe {self.current.add(size)};
         unsafe {
             (*ptr).value = value;
             (*ptr).obj_type = obj_type;
@@ -215,20 +276,23 @@ impl ObjPool {
         Ok(self.get_symbol_from_idx(idx))
     }
     pub fn alloc_cons(&mut self, car: OpaqueValue, cdr: OpaqueValue) -> Result<OpaqueValue> {
+        let car = self.ptr(car);
+        let cdr = self.ptr(cdr);
         let ptr = unsafe { self.alloc(size_of::<ObjCons>(), 0, ObjType::Cons)? };
         unsafe {
             let ptr = ptr as *mut ObjCons;
-            (*ptr).car = car.0;
-            (*ptr).cdr = cdr.0;
+            (*ptr).car = car.get_value().0;
+            (*ptr).cdr = cdr.get_value().0;
         }
         Ok(OpaqueValue::from_objhead_ptr(ptr))
     }
     pub fn alloc_closure(&mut self, func_id: FuncId, env: OpaqueValue) -> Result<OpaqueValue> {
+        let env = self.ptr(env);
         let ptr = unsafe { self.alloc(size_of::<ObjClosure>(), 0, ObjType::Closure)? };
         unsafe {
             let ptr = ptr as *mut ObjClosure;
             (*ptr).func_id = func_id;
-            (*ptr).env = env.0;
+            (*ptr).env = env.get_value().0;
         }
         Ok(OpaqueValue::from_objhead_ptr(ptr))
     }
