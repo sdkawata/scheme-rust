@@ -25,7 +25,7 @@ peg::parser!{
                 Ok(res)
             }
         rule symbol(pool: &mut ObjPool) -> Result<OpaqueValue>
-            = s:$(['a'..='z' | '+' | '=']+) {Ok(pool.get_symbol(s)?)}
+            = s:$(['a'..='z' | '+' | '=' | '?']+) {Ok(pool.get_symbol(s)?)}
         rule quoted(pool: &mut ObjPool) -> Result<OpaqueValue> 
             = "'" _ v:value(pool) {
                 let quote_symbol_idx = pool.get_symbol_idx("quote");

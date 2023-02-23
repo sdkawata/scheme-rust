@@ -225,6 +225,39 @@ fn native_eq(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
     Ok(evaluator.env.pool.get_true())
 }
 
+fn native_car(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    if list_length(&v) != Some(1) {
+        return Err(anyhow!("car error: args length != 1"))
+    }
+    if let Obj::Cons(cons) = list_nth(&v, 0).unwrap().get_obj() {
+        Ok(cons.get_car())
+    } else {
+        Err(anyhow!("car error: non-list given"))
+    }
+}
+
+fn native_cdr(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    if list_length(&v) != Some(1) {
+        return Err(anyhow!("cdr error: args length != 1"))
+    }
+    if let Obj::Cons(cons) = list_nth(&v, 0).unwrap().get_obj() {
+        Ok(cons.get_cdr())
+    } else {
+        Err(anyhow!("car error: non-list given"))
+    }
+}
+
+fn native_null_p(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    if list_length(&v) != Some(1) {
+        return Err(anyhow!("null? error: args length != 1"))
+    }
+    if let Obj::Nil = list_nth(&v, 0).unwrap().get_obj() {
+        Ok(evaluator.env.pool.get_true())
+    } else {
+        Ok(evaluator.env.pool.get_false())
+    }
+}
+
 struct CallStack {
     ret_func_id: usize,
     ret_ip: usize,
@@ -300,6 +333,9 @@ impl<'a> Evaluator<'a> {
     fn register_native_funcs(&mut self) -> Result<()> {
         self.register_native_func("+", native_plus)?;
         self.register_native_func("=", native_eq)?;
+        self.register_native_func("car", native_car)?;
+        self.register_native_func("cdr", native_cdr)?;
+        self.register_native_func("null?", native_null_p)?;
         self.create_new_frame()
     }
     fn push_stack(&mut self, v: OpaqueValue) {
