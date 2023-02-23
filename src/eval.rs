@@ -1,14 +1,13 @@
 use crate::obj::{ObjPool, OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId};
 use anyhow::{Result, anyhow};
 
-type Addr = usize;
-
 #[derive(Debug)]
 enum OpCode {
     PushI32(i32), // stack: -> I32,
     PushTrue, // stack -> true
     PushFalse, // stack -> false
     PushUndef, // stack -> undef
+    PushConst(usize), // stack -> const
     PushNil, // stack: -> nil
     LookUp(SymbolId), // stack: -> Value
     PushNewVar(SymbolId), // stack: Value ->
@@ -19,8 +18,8 @@ enum OpCode {
     CarCdr, // stack: cons -> car cdr
     Cons, // stack: car cdr -> cons
     Ret, // stack: Retval ->
-    JmpIfFalse(Addr), // stack: val ->
-    Jmp(Addr), // stack: ->
+    JmpIfFalse(usize), // stack: val ->
+    Jmp(usize), // stack: ->
     Invalid,
 }
 
@@ -31,6 +30,7 @@ struct Func {
 pub struct Environment {
     pool: ObjPool,
     funcs: Vec<Func>,
+    consts: Vec<OpaqueValue>,
 }
 
 impl Environment {
@@ -38,6 +38,7 @@ impl Environment {
         Self {
             pool: ObjPool::new(1000000),
             funcs: Vec::new(),
+            consts: Vec::new(),
         }
     }
     pub fn get_pool(&mut self) -> &mut ObjPool {
@@ -161,6 +162,17 @@ impl Environment {
                         opcodes[jmp_if_false_addr] = OpCode::JmpIfFalse(opcodes.len());
                         self.emit_rec(opcodes, &false_branch)?;
                         opcodes[jmp_addr] = OpCode::Jmp(opcodes.len());
+                        return Ok(())
+                    },
+                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "quote" => {
+                        let length = list_length(v).ok_or(anyhow!("malformed letrec: not list"))?;
+                        if length != 2 {
+                            Err(anyhow!("malformed if: length != 2"))?;
+                        }
+                        let quoted = list_nth(&v, 1).unwrap();
+                        let idx = self.consts.len();
+                        self.consts.push(quoted);
+                        opcodes.push(OpCode::PushConst(idx));
                         return Ok(())
                     },
                     _ => {},
@@ -318,6 +330,9 @@ impl<'a> Evaluator<'a> {
                 OpCode::PushI32(i) => {
                     evaluator.push_stack(evaluator.env.pool.get_i32(i))
                 },
+                OpCode::PushConst(const_idx) => {
+                    evaluator.push_stack(evaluator.env.consts[const_idx].clone());
+                }
                 OpCode::PushNil => {
                     evaluator.push_stack(evaluator.env.pool.get_nil())
                 },

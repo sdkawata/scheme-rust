@@ -26,8 +26,19 @@ peg::parser!{
             }
         rule symbol(pool: &mut ObjPool) -> Result<OpaqueValue>
             = s:$(['a'..='z' | '+' | '=']+) {Ok(pool.get_symbol(s)?)}
+        rule quoted(pool: &mut ObjPool) -> Result<OpaqueValue> 
+            = "'" _ v:value(pool) {
+                let quote_symbol_idx = pool.get_symbol_idx("quote");
+                let cons = pool.alloc_cons(
+                    v?,
+                    pool.get_nil()
+                )?;
+                Ok(
+                    pool.alloc_cons(pool.get_symbol_from_idx(quote_symbol_idx), cons)?
+                )
+            }
         rule value(pool: &mut ObjPool) -> Result<OpaqueValue>
-            = n:(number(pool) / list(pool) / symbol(pool) / true_value(pool) / false_value(pool)) {n}
+            = n:(number(pool) / list(pool) / symbol(pool) / true_value(pool) / false_value(pool) / quoted(pool)) {n}
         pub rule top(pool: &mut ObjPool) -> Result<OpaqueValue>
             = _ n:value(pool) _ {n}
     }
