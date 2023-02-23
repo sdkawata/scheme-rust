@@ -330,12 +330,17 @@ impl<'a> Evaluator<'a> {
         None
     }
     fn add_new_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
-        let pool = self.env.get_pool();
-        if let Obj::Cons(cons) = frame.get_obj() {
-            let top_frame = cons.get_car();
-            let new_pair = pool.alloc_cons(pool.get_symbol_from_idx(s), v)?;
-            let new_top_frame = pool.alloc_cons(new_pair, top_frame)?;
-            cons.set_car(new_top_frame);
+        let frame = self.env.pool.ptr(frame);
+        if let Obj::Cons(cons) = frame.get_value().get_obj() {
+            let top_frame = self.env.pool.ptr(cons.get_car());
+            let new_pair = self.env.pool.alloc_cons(self.env.pool.get_symbol_from_idx(s), v)?;
+            let new_pair = self.env.pool.ptr(new_pair);
+            let new_top_frame = self.env.pool.alloc_cons(new_pair.get_value(), top_frame.get_value())?;
+            if let Obj::Cons(cons) = frame.get_value().get_obj() {
+                cons.set_car(new_top_frame);
+            } else {
+                panic!("incositent state")
+            }
             // println!("env: {}", pool.write_to_string(&self.current_env));
             Ok(())
         } else {
@@ -409,11 +414,11 @@ impl<'a> Evaluator<'a> {
         Ok(self.pop_stack_ptr()?.get_value())
     }
     fn shrink_stack(&mut self, target_len:usize) {
-        if (target_len > self.stack.len()) {
+        if target_len > self.stack.len() {
             panic!("shrink to bigger size");
         }
         while target_len < self.stack.len() {
-            self.pop_stack();
+            self.pop_stack().unwrap();
         }
     }
     pub fn eval(env: &mut Environment, func_id: usize) -> Result<OpaqueValue> {
@@ -434,7 +439,8 @@ impl<'a> Evaluator<'a> {
         evaluator.register_native_funcs()?;
         loop {
             // eprintln!("func_id: {} ip:{} opcode:{:?}", evaluator.current_func_id, evaluator.current_ip, evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip]);
-            // eprintln!("current_env: {}", evaluator.env.pool.write_to_string(&evaluator.current_env));
+            // eprintln!("current_env: {}", evaluator.env.pool.write_to_string(&evaluator.current_env.get_value()));
+            // eprintln!("stack top: {}", evaluator.peek_stack().map(|v| evaluator.env.pool.write_to_string(&v)).or_else(|_| Ok::<String, anyhow::Error>("no stack".to_string()))?);
             match evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip] {
                 OpCode::PushI32(i) => {
                     evaluator.push_stack(evaluator.env.pool.get_i32(i))
@@ -473,8 +479,8 @@ impl<'a> Evaluator<'a> {
                     evaluator.set_var(evaluator.current_env.get_value(), s, value)?;
                 },
                 OpCode::PopAndSetFrame => {
-                    let frame = evaluator.pop_stack()?;
-                    evaluator.current_env = evaluator.env.pool.ptr(frame)
+                    let frame = evaluator.pop_stack_ptr()?;
+                    evaluator.current_env = frame;
                 }
                 OpCode::SetFramePrevious => {
                     evaluator.set_frame_previous();
@@ -499,12 +505,12 @@ impl<'a> Evaluator<'a> {
                     }
                 }
                 OpCode::Call => {
-                    let args = evaluator.pop_stack().unwrap();
+                    let args = evaluator.pop_stack_ptr().unwrap();
                     let callee = evaluator.pop_stack().unwrap();
                     match callee.get_obj() {
                         Obj::Native(i) => {
                             let fun = evaluator.natives[i as usize];
-                            let retval = fun(&mut evaluator, args)?;
+                            let retval = fun(&mut evaluator, args.get_value())?;
                             evaluator.push_stack(retval)
                         },
                         Obj::Closure(closure) => {
@@ -519,7 +525,7 @@ impl<'a> Evaluator<'a> {
                                 }
                             );
                             evaluator.set_new_frame()?;
-                            evaluator.push_stack(args);
+                            evaluator.push_stack(args.get_value());
                             evaluator.current_func_id = func_id as usize;
                             evaluator.current_ip = 0;
                             evaluator.current_env = env;
@@ -575,15 +581,15 @@ mod tests {
     use crate::obj;
     use anyhow::Result;
 
-    fn assert_evaluated_to(env: &mut Environment, expr: OpaqueValue, expected: OpaqueValue) -> Result<()> {
-        let func_id = env.emit(&expr).unwrap();
+    fn assert_evaluated_to(env: &mut Environment, expr: &Ptr, expected: &Ptr) -> Result<()> {
+        let func_id = env.emit(&expr.get_value()).unwrap();
         let result = Evaluator::eval(env, func_id)?;
         assert!(
-            obj::equal(&result, &expected),
+            obj::equal(&result, &expected.get_value()),
             "{} evaluated to {} expected {}",
-            env.get_pool().write_to_string(&expr),
+            env.get_pool().write_to_string(&expr.get_value()),
             env.get_pool().write_to_string(&result),
-            env.get_pool().write_to_string(&expected),
+            env.get_pool().write_to_string(&expected.get_value()),
         );
         Ok(())
     }
@@ -594,14 +600,17 @@ mod tests {
         path.push("tests/small_tests.scm");
         let tests = std::fs::read_to_string(path).unwrap();
         let mut env = Environment::new();
-        let v = parser::parse(&tests, env.get_pool()).unwrap();
-        for result in crate::obj::list_iterator(v) {
-            let pair = result.unwrap();
-            let expr = obj::list_nth(&pair, 0).unwrap();
-            // eprintln!("evaluating {}", env.get_pool().write_to_string(&expr));
-            let expected = obj::list_nth(&pair, 1).unwrap();
-            assert_evaluated_to(&mut env, expr.clone(), expected.clone()).map_err(|err|
-                anyhow!("error evaluating {}:{}", env.pool.write_to_string(&expr), err)
+        let parsed = parser::parse(&tests, &mut env.pool).unwrap();
+        env.pool.force_gc_every_alloc = true;
+        let mut current = env.pool.ptr(parsed);
+        while let Obj::Cons(cons) = current.get_value().get_obj() {
+            current = env.pool.ptr(cons.get_cdr());
+            let pair = env.pool.ptr(cons.get_car());
+            let expr = env.pool.ptr(obj::list_nth(&pair.get_value(), 0).unwrap());
+            // eprintln!("evaluating {}", env.get_pool().write_to_string(&expr.get_value()));
+            let expected = env.pool.ptr(obj::list_nth(&pair.get_value(), 1).unwrap());
+            assert_evaluated_to(&mut env, &expr, &expected).map_err(|err|
+                anyhow!("error evaluating {}:{}", env.pool.write_to_string(&expr.get_value()), err)
             ).unwrap();
         }
     }

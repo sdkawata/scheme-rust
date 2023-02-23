@@ -6,14 +6,15 @@ use anyhow::{Result, anyhow};
 use std::mem::size_of;
 
 #[repr(C)]
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy, Debug)]
 enum ObjType {
     Cons,
     Closure,
+    Forwarded,
 }
 
 #[repr(C)]
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,Debug)]
 enum ValueType {
     Nil,
     I32,
@@ -48,6 +49,13 @@ struct ObjClosure {
     env: Value,
 }
 
+
+#[repr(C)]
+struct ObjForwarded {
+    head: ObjHead,
+    forwarded: Value,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct OpaqueValue(Value);
@@ -59,8 +67,27 @@ impl OpaqueValue {
     fn from_value(value: u32, value_type: ValueType) -> Self {
         OpaqueValue(((value as u64) << 32) + ((value_type as u64) << 1) + 1)
     }
+    fn as_ptr(&self) -> *mut ObjHead {
+        unsafe{ std::mem::transmute(self.0) }
+    }
+    fn is_value(&self) -> bool {
+        self.0 %2 == 1
+    }
+    unsafe fn obj_type(&self) -> ObjType {
+        debug_assert!(!self.is_value());
+        let ptr: *mut ObjHead = self.as_ptr();
+        unsafe {(*ptr).obj_type}
+    }
+    unsafe fn obj_size(&self) -> usize {
+        debug_assert!(!self.is_value());
+        match self.obj_type() {
+            ObjType::Cons => size_of::<ObjCons>(),
+            ObjType::Closure => size_of::<ObjClosure>(),
+            ObjType::Forwarded => size_of::<ObjForwarded>(),
+        }
+    }
     pub fn get_obj(&self) -> Obj {
-        if self.0 %2 == 1 {
+        if self.is_value() {
             // value
             let value = (self.0 >> 32) as u32;
             let value_type = ((self.0 & 0xffff) >> 1) as u64;
@@ -83,10 +110,10 @@ impl OpaqueValue {
             }
         } else {
             // pointer
-            let ptr: *mut ObjHead = unsafe{ std::mem::transmute(self.0) };
-            match unsafe { (*ptr).obj_type } {
+            match unsafe { self.obj_type() } {
                 ObjType::Cons => Obj::Cons(OpaqueValueCons(self.0 as *mut ObjCons)),
                 ObjType::Closure => Obj::Closure(OpaqueValueClosure(self.0 as *mut ObjClosure)),
+                ObjType::Forwarded => Obj::Forwarded(OpaqueValueForwarded(self.0 as *mut ObjForwarded)),
             }
         }
     }
@@ -111,6 +138,10 @@ impl OpaqueValueCons {
     }
 }
 
+
+#[derive(Debug, Clone)]
+pub struct OpaqueValueForwarded(*mut ObjForwarded);
+
 #[derive(Debug, Clone)]
 pub struct OpaqueValueClosure(*mut ObjClosure);
 
@@ -134,6 +165,7 @@ pub enum Obj {
     Symbol(SymbolId),
     Cons(OpaqueValueCons),
     Closure(OpaqueValueClosure),
+    Forwarded(OpaqueValueForwarded),
 }
 
 pub struct ObjPool {
@@ -147,6 +179,8 @@ pub struct ObjPool {
     symbols_map: HashMap<String, SymbolId>,
     head_entry: NonNull<PtrNode>,
     tail_entry: NonNull<PtrNode>,
+    pub disable_gc: bool,
+    pub force_gc_every_alloc: bool,
 }
 
 
@@ -159,7 +193,7 @@ impl Drop for ObjPool {
 struct PtrNode {
     next: Option<NonNull<PtrNode>>,
     prev: Option<NonNull<PtrNode>>,
-    element: Value,
+    element: OpaqueValue,
 }
 
 impl PtrNode {
@@ -169,7 +203,7 @@ impl PtrNode {
                 PtrNode {
                     prev: None,
                     next: None,
-                    element: value.0,
+                    element: value,
                 }
             )
         ).into()
@@ -180,7 +214,7 @@ pub struct Ptr(NonNull<PtrNode>);
 
 impl Ptr {
     pub fn get_value(&self) -> OpaqueValue {
-        OpaqueValue(unsafe {(*self.0.as_ptr()).element} )
+        unsafe {(*self.0.as_ptr()).element.clone()}
     }
 }
 
@@ -211,9 +245,14 @@ impl ObjPool {
             symbols_map: HashMap::new(),
             head_entry,
             tail_entry,
+            disable_gc: false,
+            force_gc_every_alloc: false,
         }
     }
     pub fn ptr(&mut self, value: OpaqueValue) -> Ptr {
+        //eprintln!("from_space:{:?} to_space:{:?} pool_size:{} ptr:{:?}", self.from_space, self.to_space,self.pool_size, value.as_ptr());
+        debug_assert!(value.is_value() || (value.as_ptr() as *mut u8) >= self.from_space);
+        debug_assert!(unsafe{ value.is_value() || (value.as_ptr() as *mut u8) < self.from_space.add(self.pool_size) });
         let new_entry = PtrNode::new_ptr(value);
         unsafe {
             let second_last_entry = (*self.tail_entry.as_ptr()).prev.unwrap();
@@ -224,18 +263,76 @@ impl ObjPool {
         }
         Ptr(new_entry as NonNull<PtrNode>)
     }
+    unsafe fn init_obj_head(&self, ptr: *mut ObjHead, value: u32, obj_type: ObjType) {
+        (*ptr).value = value;
+        (*ptr).obj_type = obj_type;
+    }
+    unsafe fn no_space_left(&self, size: usize) -> bool {
+        self.current.add(size) >= self.from_space.add(self.pool_size)
+    }
     unsafe fn alloc(&mut self, size: usize, value: u32, obj_type: ObjType) -> Result<* mut ObjHead> {
-        let size = (size + 1) / 2 * 2;
-        if self.current.add(size) >= self.from_space.add(self.pool_size) {
+        // let size = (size + 1) / 2 * 2;
+        if ! self.disable_gc && (self.force_gc_every_alloc ||  self.no_space_left(size)) {
+            self.start_gc();
+        }
+        if self.no_space_left(size) {
             return Err(anyhow!("no space left in pool"));
         }
         let ptr = self.current as *mut ObjHead;
         self.current = unsafe {self.current.add(size)};
-        unsafe {
-            (*ptr).value = value;
-            (*ptr).obj_type = obj_type;
-        }
+        self.init_obj_head(ptr, value, obj_type);
         Ok(ptr)
+    }
+    unsafe fn copy_obj(&mut self, value: OpaqueValue) -> OpaqueValue {
+        if value.is_value() {
+            return value;
+        }
+        //eprintln!("copy_obj ptr:{:?} current:{:?} type:{:?} size:{} obj:{}", value.as_ptr(), self.current, value.obj_type(), value.obj_size(), self.write_to_string(&value));
+        debug_assert!((value.as_ptr() as *mut u8) >= self.to_space);
+        debug_assert!((value.as_ptr() as *mut u8) < self.to_space.add(self.pool_size));
+        match value.get_obj() {
+            Obj::Forwarded(forwarded) => {
+                OpaqueValue((*forwarded.0).forwarded)
+            },
+            _ => {
+                let forwarding_addr = self.current;
+                self.current = self.current.add(value.obj_size());
+                std::ptr::copy_nonoverlapping(value.as_ptr() as *mut u8, forwarding_addr, value.obj_size());
+                self.init_obj_head(value.as_ptr(), 0, ObjType::Forwarded);
+                let forwarded_ptr = value.as_ptr() as *mut ObjForwarded;
+                (*forwarded_ptr).forwarded = forwarding_addr as Value;
+                OpaqueValue::from_objhead_ptr(forwarding_addr as *mut ObjHead)
+            }
+        }
+    }
+    unsafe fn start_gc(&mut self) {
+        // eprintln!("start_gc");
+        std::mem::swap(&mut self.to_space, &mut self.from_space);
+        self.current = self.from_space;
+        //eprintln!("start_gc from_space:{:?} to_space:{:?}", self.from_space, self.to_space);
+        let mut scan_ptr = self.current;
+        let mut current_entry = Some(self.head_entry);
+        while let Some(entry) = current_entry {
+            // eprintln!("ptr:{:?}", (*entry.as_ptr()).element.as_ptr());
+            (*entry.as_ptr()).element = self.copy_obj((*entry.as_ptr()).element.clone());
+            current_entry = (*entry.as_ptr()).next;
+        }
+        while scan_ptr < self.current {
+            let current_value = OpaqueValue::from_objhead_ptr(scan_ptr as *mut ObjHead);
+            //eprintln!("scan {:?} current:{:?} type:{:?} {}", scan_ptr, self.current, current_value.obj_type(), self.write_to_string(&current_value));
+            match current_value.get_obj() {
+                Obj::Cons(cons) => {
+                    cons.set_car(self.copy_obj(cons.get_car()));
+                    cons.set_cdr(self.copy_obj(cons.get_cdr()));
+                },
+                Obj::Closure(closure) => {
+                    (*closure.0).env = self.copy_obj(closure.get_env()).0
+                }
+                _ => panic!("unreachable")
+            }
+            scan_ptr = scan_ptr.add(current_value.obj_size())
+        }
+        // eprintln!("end_gc");
     }
     pub fn get_i32(&self, i: i32) -> OpaqueValue {
         OpaqueValue::from_value(i as u32, ValueType::I32)
@@ -312,6 +409,7 @@ impl ObjPool {
             Obj::Symbol(s) => {write!(w, "{}", self.get_symbol_str(s))?;}
             Obj::Cons(_) => {self.write_list(w, v)?;}
             Obj::Closure(_) => {write!(w, "#closure#")?;}
+            Obj::Forwarded(_) => {write!(w, "#forwarded#")?;}
         }
         Ok(())
     }

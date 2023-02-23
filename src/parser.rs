@@ -45,7 +45,10 @@ peg::parser!{
 
 pub fn parse(s: &str, pool: &mut ObjPool) -> Result<OpaqueValue> {
     // Err(anyhow!("a"))
-    scheme_parser::top(s, pool)?
+    pool.disable_gc = true;
+    let ret = scheme_parser::top(s, pool)?;
+    pool.disable_gc = false;
+    ret
 }
 
 #[cfg(test)]
