@@ -9,9 +9,11 @@ enum OpCode {
     PushUndef, // stack -> undef
     PushConst(usize), // stack -> const
     PushNil, // stack: -> nil
-    LookUp(SymbolId), // stack: -> Value
-    PushNewVar(SymbolId), // stack: Value ->
-    CreateNewFrame, 
+    LookUp(SymbolId), // stack: -> value
+    AddNewVar(SymbolId), // stack: frame value -> frame
+    AddNewVarCurrent(SymbolId), // stack: frame value -> frame
+    PushNewFrame, // stack: -> frame
+    PopAndSetFrame, // stack: frame ->
     SetFramePrevious,
     Closure(FuncId), // stack: -> closure
     Call, // stack: func args -> retval
@@ -100,7 +102,7 @@ impl Environment {
                             Err(anyhow!("malformed let: length < 3"))?;
                         }
                         let binds = list_nth(v, 1).unwrap();
-                        opcodes.push(OpCode::CreateNewFrame);
+                        opcodes.push(OpCode::PushNewFrame);
                         for bind in list_iterator(binds) {
                             let bind = bind?;
                             if list_length(&bind) != Some(2) {
@@ -109,11 +111,12 @@ impl Environment {
                             if let Obj::Symbol(s) = list_nth(&bind, 0).unwrap().get_obj() {
                                 let value = list_nth(&bind, 1).unwrap();
                                 self.emit_rec(opcodes, &value)?;
-                                opcodes.push(OpCode::PushNewVar(s))
+                                opcodes.push(OpCode::AddNewVar(s))
                             } else {
                                 Err(anyhow!("malformed let: bind key is not symbol"))?;
                             }
                         }
+                        opcodes.push(OpCode::PopAndSetFrame);
                         // TODO: body have multiple expr
                         let body = list_nth(v, 2).unwrap();
                         self.emit_rec(opcodes, &body)?;
@@ -135,7 +138,7 @@ impl Environment {
                             for v in list_iterator(args) {
                                 if let Obj::Symbol(s) = v.unwrap().get_obj() {
                                     opcodes.push(OpCode::CarCdr);
-                                    opcodes.push(OpCode::PushNewVar(s));
+                                    opcodes.push(OpCode::AddNewVarCurrent(s));
                                 } else {
                                     return Err(anyhow!("emit error: args is not symbol"))
                                 }
@@ -294,9 +297,9 @@ impl<'a> Evaluator<'a> {
         }
         None
     }
-    fn push_new_var(&mut self, s: SymbolId, v: OpaqueValue) -> Result<()> {
+    fn add_new_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
         let pool = self.env.get_pool();
-        if let Obj::Cons(cons) = self.current_env.get_obj() {
+        if let Obj::Cons(cons) = frame.get_obj() {
             let top_frame = cons.get_car();
             let new_pair = pool.alloc_cons(pool.get_symbol_from_idx(s), v)?;
             let new_top_frame = pool.alloc_cons(new_pair, top_frame)?;
@@ -315,11 +318,15 @@ impl<'a> Evaluator<'a> {
             panic!("unexpected environment format: not cons")
         }
     }
-    fn create_new_frame(&mut self) -> Result<()>{
+    fn set_new_frame(&mut self) -> Result<()> {
+        let new_frame = self.create_new_frame()?;
+        self.current_env = new_frame;
+        Ok(())
+    }
+    fn create_new_frame(&mut self) -> Result<OpaqueValue>{
         let pool = &mut self.env.pool;
         let new_frame = pool.get_nil();
-        self.current_env = pool.alloc_cons(new_frame, self.current_env.clone())?;
-        Ok(())
+        pool.alloc_cons(new_frame, self.current_env.clone())
     }
     fn register_native_func(&mut self, name: &str, func: NativeFunc) -> Result<()> {
         let pool = &mut self.env.pool;
@@ -327,8 +334,7 @@ impl<'a> Evaluator<'a> {
         let idx = self.natives.len();
         self.natives.push(func);
         let val = pool.get_native(idx as u32);
-        self.push_new_var(symbol_id, val)
-
+        self.add_new_var(self.current_env.clone(), symbol_id, val)
     }
     fn register_native_funcs(&mut self) -> Result<()> {
         self.register_native_func("+", native_plus)?;
@@ -336,10 +342,13 @@ impl<'a> Evaluator<'a> {
         self.register_native_func("car", native_car)?;
         self.register_native_func("cdr", native_cdr)?;
         self.register_native_func("null?", native_null_p)?;
-        self.create_new_frame()
+        self.set_new_frame()
     }
     fn push_stack(&mut self, v: OpaqueValue) {
         self.stack.push(v)
+    }
+    fn peek_stack(&mut self) -> Result<OpaqueValue> {
+        Ok(self.stack.last().ok_or(anyhow!("eval error:trying to peek from empty stack"))?.to_owned())
     }
     fn pop_stack(&mut self) -> Result<OpaqueValue> {
         self.stack.pop().ok_or(anyhow!("eval error:trying to pop from empty stack"))
@@ -362,6 +371,7 @@ impl<'a> Evaluator<'a> {
         evaluator.register_native_funcs()?;
         loop {
             // eprintln!("func_id: {} ip:{} opcode:{:?}", evaluator.current_func_id, evaluator.current_ip, evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip]);
+            // eprintln!("current_env: {}", evaluator.env.pool.write_to_string(&evaluator.current_env));
             match evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip] {
                 OpCode::PushI32(i) => {
                     evaluator.push_stack(evaluator.env.pool.get_i32(i))
@@ -386,15 +396,25 @@ impl<'a> Evaluator<'a> {
                     let value = evaluator.lookup(s).ok_or(anyhow!("undefined symbol: {}", evaluator.env.pool.get_symbol_str(s)))?;
                     evaluator.push_stack(value)
                 },
-                OpCode::PushNewVar(s) => {
+                OpCode::AddNewVar(s) => {
                     let value = evaluator.pop_stack()?;
-                    evaluator.push_new_var(s, value)?;
+                    let frame = evaluator.peek_stack()?;
+                    evaluator.add_new_var(frame, s, value)?;
                 },
+                OpCode::AddNewVarCurrent(s) => {
+                    let value = evaluator.pop_stack()?;
+                    evaluator.add_new_var(evaluator.current_env.clone(), s, value)?;
+                },
+                OpCode::PopAndSetFrame => {
+                    let frame = evaluator.pop_stack()?;
+                    evaluator.current_env = frame
+                }
                 OpCode::SetFramePrevious => {
                     evaluator.set_frame_previous();
                 },
-                OpCode::CreateNewFrame => {
-                    evaluator.create_new_frame()?;
+                OpCode::PushNewFrame => {
+                    let new_frame = evaluator.create_new_frame()?;
+                    evaluator.push_stack(new_frame);
                 },
                 OpCode::Cons => {
                     let cdr = evaluator.pop_stack()?;
@@ -431,6 +451,7 @@ impl<'a> Evaluator<'a> {
                                     ret_base_pointer: evaluator.stack.len()
                                 }
                             );
+                            evaluator.set_new_frame()?;
                             evaluator.push_stack(args);
                             evaluator.current_func_id = func_id as usize;
                             evaluator.current_ip = 0;
@@ -510,7 +531,7 @@ mod tests {
         for result in crate::obj::list_iterator(v) {
             let pair = result.unwrap();
             let expr = obj::list_nth(&pair, 0).unwrap();
-            // println!("evaluating {}", env.get_pool().write_to_string(&expr));
+            // eprintln!("evaluating {}", env.get_pool().write_to_string(&expr));
             let expected = obj::list_nth(&pair, 1).unwrap();
             assert_evaluated_to(&mut env, expr.clone(), expected.clone()).map_err(|err|
                 anyhow!("error evaluating {}:{}", env.pool.write_to_string(&expr), err)
