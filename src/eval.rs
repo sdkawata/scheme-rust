@@ -1,4 +1,4 @@
-use crate::obj::{ObjPool, OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length};
+use crate::obj::{ObjPool, OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId};
 use anyhow::{Result, anyhow};
 
 #[derive(Debug)]
@@ -9,7 +9,9 @@ enum OpCode {
     PushNewVar(SymbolId), // stack: Value ->
     CreateNewFrame, 
     SetFramePrevious,
+    Closure(FuncId), // stack: -> closure
     Call, // stack: func args -> retval
+    CarCdr, // stack: cons -> car cdr
     Cons, // stack: car cdr -> cons
     Ret, // stack: Retval -> 
 }
@@ -34,11 +36,14 @@ impl Environment {
         &mut self.pool
     }
     pub fn emit(&mut self, v: &OpaqueValue) -> Result<usize> {
-        let mut opcodes = Vec::new();
+        let opcodes = Vec::new();
+        self.emit_func(opcodes, v)
+    }
+    fn emit_func(&mut self, mut opcodes: Vec<OpCode>, v: &OpaqueValue) -> Result<usize> {
         self.emit_rec(&mut opcodes, v)?;
         opcodes.push(OpCode::Ret);
         let idx = self.funcs.len();
-        // println!("{:?}", &opcodes);
+        // eprintln!("{:?}", &opcodes);
         self.funcs.push(Func{
             opcodes
         });
@@ -98,6 +103,31 @@ impl Environment {
                         opcodes.push(OpCode::SetFramePrevious);
                         return Ok(());
                     },
+                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "lambda" => {
+                        let length = list_length(v).ok_or(anyhow!("malformed lambda: not list"))?;
+                        if length < 3 {
+                            Err(anyhow!("malformed lambda: length < 3"))?;
+                        }
+                        let args = list_nth(v, 1).unwrap();
+                        let body = list_nth(v, 2).unwrap();
+                        if list_length(&args) == None {
+                            return Err(anyhow!("emit error: args is not list"))
+                        }
+                        let func_id = {
+                            let mut opcodes = Vec::<OpCode>::new();
+                            for v in list_iterator(args) {
+                                if let Obj::Symbol(s) = v.unwrap().get_obj() {
+                                    opcodes.push(OpCode::CarCdr);
+                                    opcodes.push(OpCode::PushNewVar(s));
+                                } else {
+                                    return Err(anyhow!("emit error: args is not symbol"))
+                                }
+                            }
+                            self.emit_func(opcodes, &body)
+                        }?;
+                        opcodes.push(OpCode::Closure(func_id as FuncId));
+                        return Ok(())
+                    },
                     _ => {},
                 }
                 self.emit_rec(opcodes, &cons.get_car())?;
@@ -130,6 +160,12 @@ fn native_plus(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue>
     Ok(result)
 }
 
+struct CallStack {
+    ret_func_id: usize,
+    ret_ip: usize,
+    ret_base_pointer: usize,
+}
+
 pub struct Evaluator<'a> {
     current_func_id: usize,
     current_ip: usize,
@@ -137,6 +173,7 @@ pub struct Evaluator<'a> {
     current_env: OpaqueValue, // envronment is list of list of pair (key(symbol), value)
     env: & 'a mut Environment,
     natives: Vec<NativeFunc>,
+    call_stack: Vec<CallStack>,
 }
 
 impl<'a> Evaluator<'a> {
@@ -199,6 +236,12 @@ impl<'a> Evaluator<'a> {
         self.register_native_func("+", native_plus)?;
         self.create_new_frame()
     }
+    fn push_stack(&mut self, v: OpaqueValue) {
+        self.stack.push(v)
+    }
+    fn pop_stack(&mut self) -> Result<OpaqueValue> {
+        self.stack.pop().ok_or(anyhow!("eval error:trying to pop from empty stack"))
+    }
     pub fn eval(env: &mut Environment, func_id: usize) -> Result<OpaqueValue> {
         let pool = &mut env.pool;
         let initial_env = pool.alloc_cons(
@@ -212,22 +255,25 @@ impl<'a> Evaluator<'a> {
             current_env: initial_env,
             env,
             natives: Vec::new(),
+            call_stack: Vec::new(),
         };
         evaluator.register_native_funcs()?;
         loop {
+            // eprintln!("func_id: {} ip:{} opcode:{:?}", evaluator.current_func_id, evaluator.current_ip, evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip]);
             match evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip] {
                 OpCode::PushI32(i) => {
-                    evaluator.stack.push(evaluator.env.pool.get_i32(i))
+                    evaluator.push_stack(evaluator.env.pool.get_i32(i))
                 },
                 OpCode::PushNil => {
-                    evaluator.stack.push(evaluator.env.pool.get_nil())
+                    evaluator.push_stack(evaluator.env.pool.get_nil())
                 }
                 OpCode::LookUp(s) => {
+                    // eprintln!("{}", evaluator.env.pool.write_to_string(&evaluator.current_env));
                     let value = evaluator.lookup(s).ok_or(anyhow!("undefined symbol"))?;
-                    evaluator.stack.push(value)
+                    evaluator.push_stack(value)
                 },
                 OpCode::PushNewVar(s) => {
-                    let value = evaluator.stack.pop().ok_or(anyhow!("nothing to push"))?;
+                    let value = evaluator.pop_stack()?;
                     evaluator.push_new_var(s, value)?;
                 },
                 OpCode::SetFramePrevious => {
@@ -237,25 +283,67 @@ impl<'a> Evaluator<'a> {
                     evaluator.create_new_frame()?;
                 },
                 OpCode::Cons => {
-                    let cdr = evaluator.stack.pop().unwrap();
-                    let car = evaluator.stack.pop().unwrap();
+                    let cdr = evaluator.pop_stack()?;
+                    let car = evaluator.pop_stack()?;
                     let cons = evaluator.env.pool.alloc_cons(car, cdr)?;
                     evaluator.stack.push(cons);
                 },
+                OpCode::CarCdr => {
+                    let cons = evaluator.stack.pop().unwrap();
+                    if let Obj::Cons(cons) = cons.get_obj() {
+                        evaluator.push_stack(cons.get_cdr());
+                        evaluator.push_stack(cons.get_car());
+                    } else {
+                        return Err(anyhow!("eval error: carcdr inst encounter non-cons"))
+                    }
+                }
                 OpCode::Call => {
-                    let args = evaluator.stack.pop().unwrap();
-                    let callee = evaluator.stack.pop().unwrap();
+                    let args = evaluator.pop_stack().unwrap();
+                    let callee = evaluator.pop_stack().unwrap();
                     match callee.get_obj() {
                         Obj::Native(i) => {
                             let fun = evaluator.natives[i as usize];
                             let retval = fun(&mut evaluator, args)?;
                             evaluator.stack.push(retval)
-                        }
-                        _ => {return Err(anyhow!("eval error: not callable"))}
+                        },
+                        Obj::Closure(closure) => {
+                            let func_id = closure.get_func_id();
+                            let env = closure.get_env();
+                            evaluator.push_stack(evaluator.current_env.clone());
+                            evaluator.call_stack.push(
+                                CallStack { 
+                                    ret_func_id: evaluator.current_func_id,
+                                    ret_ip: evaluator.current_ip + 1,
+                                    ret_base_pointer: evaluator.stack.len()
+                                }
+                            );
+                            evaluator.push_stack(args);
+                            evaluator.current_func_id = func_id as usize;
+                            evaluator.current_ip = 0;
+                            evaluator.current_env = env;
+                            continue;
+                        },
+                        _ => {return Err(anyhow!("eval error: not callable {:?}", evaluator.env.pool.write_to_string(&callee)))}
                     }
                 },
+                OpCode::Closure(func_id) => {
+                    let closure = evaluator.env.pool.alloc_closure(func_id as FuncId, evaluator.current_env.clone())?;
+                    evaluator.push_stack(closure)
+                },
                 OpCode::Ret => {
-                    return evaluator.stack.pop().ok_or(anyhow!("nothing to return"));
+                    let retval = evaluator.pop_stack()?;
+                    if let Some(call_stack) = evaluator.call_stack.pop() {
+                        evaluator.current_func_id = call_stack.ret_func_id;
+                        evaluator.current_ip = call_stack.ret_ip;
+                        evaluator.stack.resize(call_stack.ret_base_pointer, evaluator.env.pool.get_nil());
+                        evaluator.current_env = evaluator.pop_stack()?;
+                        evaluator.push_stack(retval);
+                        continue;
+                    } else {
+                        // no call stack return from eval loop
+                        return Ok(retval);
+                    }
+
                 }
             }
             evaluator.current_ip+=1;

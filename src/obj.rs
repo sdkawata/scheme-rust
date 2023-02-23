@@ -17,7 +17,11 @@ pub struct ObjPool {
 #[derive(Clone,Copy)]
 enum ObjType {
     Cons,
+    Closure,
 }
+
+#[repr(C)]
+#[derive(Clone,Copy)]
 enum ValueType {
     Nil,
     I32,
@@ -28,6 +32,7 @@ enum ValueType {
 type Value = u64;
 pub type NativeId = u32;
 pub type SymbolId = u32;
+pub type FuncId = u32;
 #[repr(C)]
 struct ObjHead {
     value: u32,
@@ -39,6 +44,13 @@ struct ObjCons {
     head: ObjHead,
     car: Value,
     cdr: Value,
+}
+
+#[repr(C)]
+struct ObjClosure {
+    head: ObjHead,
+    func_id: FuncId,
+    env: Value,
 }
 
 #[repr(C)]
@@ -73,6 +85,7 @@ impl OpaqueValue {
             let ptr: *mut ObjHead = unsafe{ std::mem::transmute(self.0) };
             match unsafe { (*ptr).obj_type } {
                 ObjType::Cons => Obj::Cons(OpaqueValueCons(self.0 as *mut ObjCons)),
+                ObjType::Closure => Obj::Closure(OpaqueValueClosure(self.0 as *mut ObjClosure)),
             }
         }
     }
@@ -86,14 +99,23 @@ impl OpaqueValueCons {
     pub fn set_car(&self, v: OpaqueValue) {
         unsafe {(*self.0).car = v.0;}
     }
-    pub fn set_cdr(&self, v: OpaqueValue) {
-        unsafe {(*self.0).cdr = v.0;}
-    }
     pub fn get_car(&self) -> OpaqueValue {
         OpaqueValue(unsafe {(*self.0).car})
     }
     pub fn get_cdr(&self) -> OpaqueValue {
         OpaqueValue(unsafe {(*self.0).cdr})
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OpaqueValueClosure(*mut ObjClosure);
+
+impl OpaqueValueClosure {
+    pub fn get_func_id(&self) -> FuncId {
+        unsafe {(*self.0).func_id}
+    }
+    pub fn get_env(&self) -> OpaqueValue {
+        OpaqueValue(unsafe {(*self.0).env})
     }
 }
 
@@ -104,6 +126,7 @@ pub enum Obj {
     Native(NativeId),
     Symbol(SymbolId),
     Cons(OpaqueValueCons),
+    Closure(OpaqueValueClosure),
 }
 
 impl Drop for ObjPool {
@@ -176,6 +199,15 @@ impl ObjPool {
         }
         Ok(OpaqueValue::from_objhead_ptr(ptr))
     }
+    pub fn alloc_closure(&mut self, func_id: FuncId, env: OpaqueValue) -> Result<OpaqueValue> {
+        let ptr = unsafe { self.alloc(size_of::<ObjClosure>(), 0, ObjType::Closure)? };
+        unsafe {
+            let ptr = ptr as *mut ObjClosure;
+            (*ptr).func_id = func_id;
+            (*ptr).env = env.0;
+        }
+        Ok(OpaqueValue::from_objhead_ptr(ptr))
+    }
     pub fn write_to_string(&self, v: &OpaqueValue) -> String {
         let mut buf = String::new();
         self.write(&mut buf, v).unwrap();
@@ -188,6 +220,7 @@ impl ObjPool {
             Obj::Native(i) => {write!(w, "#native:{}#", i)?;}
             Obj::Symbol(s) => {write!(w, "{}", self.get_symbol_str(s))?;}
             Obj::Cons(_) => {self.write_list(w, v)?;}
+            Obj::Closure(_) => {write!(w, "#closure#")?;}
         }
         Ok(())
     }
@@ -326,6 +359,21 @@ mod tests {
                 panic!("unexpected")
             }
             if let Obj::Nil = cons.get_cdr().get_obj() {
+            } else {
+                panic!("unexpected")
+            }
+        } else {
+            panic!("unexpected")
+        }
+    }
+    #[test]
+    fn can_alloc_closure() {
+        let mut pool = ObjPool::new(100);
+        let nil = pool.get_nil();
+        let value = pool.alloc_closure(42, nil).unwrap();
+        if let Obj::Closure(closure) = value.get_obj() {
+            assert_eq!(42, closure.get_func_id());
+            if let Obj::Nil = closure.get_env().get_obj() {
             } else {
                 panic!("unexpected")
             }
