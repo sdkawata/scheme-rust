@@ -1,5 +1,6 @@
 use std::io::{Write, stdout};
-use crate::obj::{ObjPool, OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId, Ptr};
+use crate::obj;
+use crate::obj::{OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId, Ptr};
 use anyhow::{Result, anyhow};
 
 #[derive(Debug)]
@@ -33,7 +34,6 @@ struct Func {
 }
 
 pub struct Environment {
-    pool: ObjPool,
     funcs: Vec<Func>,
     consts: Vec<Ptr>,
     writer: Box<dyn Write>,
@@ -57,14 +57,10 @@ fn bind_pair_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<(SymbolId, Op
 impl Environment {
     pub fn new() -> Self {
         Self {
-            pool: ObjPool::new(1000000),
             funcs: Vec::new(),
             consts: Vec::new(),
             writer: Box::new(stdout()),
         }
-    }
-    pub fn get_pool(&mut self) -> &mut ObjPool {
-        &mut self.pool
     }
     pub fn emit(&mut self, v: &OpaqueValue) -> Result<usize> {
         let opcodes = Vec::new();
@@ -128,7 +124,7 @@ impl Environment {
             Obj::Cons(cons) => {
                 let car = cons.get_car();
                 match car.get_obj() {
-                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "let" => {
+                    Obj::Symbol(s) if obj::get_symbol_str(s) == "let" => {
                         let length = list_length(v).ok_or(anyhow!("malformed let: not list"))?;
                         if length < 3 {
                             Err(anyhow!("malformed let: length < 3"))?;
@@ -149,7 +145,7 @@ impl Environment {
                         }
                         return Ok(());
                     },
-                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "letrec" => {
+                    Obj::Symbol(s) if obj::get_symbol_str(s) == "letrec" => {
                         let length = list_length(v).ok_or(anyhow!("malformed letrec: not list"))?;
                         if length < 3 {
                             Err(anyhow!("malformed letrec: length < 3"))?;
@@ -175,7 +171,7 @@ impl Environment {
                         }
                         return Ok(());
                     },
-                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "lambda" => {
+                    Obj::Symbol(s) if obj::get_symbol_str(s) == "lambda" => {
                         let length = list_length(v).ok_or(anyhow!("malformed lambda: not list"))?;
                         if length != 3 {
                             Err(anyhow!("malformed lambda: length != 3"))?;
@@ -203,7 +199,7 @@ impl Environment {
                         }
                         return Ok(())
                     },
-                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "if" => {
+                    Obj::Symbol(s) if obj::get_symbol_str(s) == "if" => {
                         let length = list_length(v).ok_or(anyhow!("malformed if: not list"))?;
                         if length < 4 {
                             Err(anyhow!("malformed if: length != 4"))?;
@@ -226,14 +222,14 @@ impl Environment {
                         }
                         return Ok(())
                     },
-                    Obj::Symbol(s) if self.pool.get_symbol_str(s) == "quote" => {
+                    Obj::Symbol(s) if obj::get_symbol_str(s) == "quote" => {
                         let length = list_length(v).ok_or(anyhow!("malformed letrec: not list"))?;
                         if length != 2 {
                             Err(anyhow!("malformed if: length != 2"))?;
                         }
                         let quoted = list_nth(&v, 1).unwrap();
                         let idx = self.consts.len();
-                        self.consts.push(self.pool.ptr(quoted));
+                        self.consts.push(obj::ptr(quoted));
                         opcodes.push(OpCode::PushConst(idx));
                         if tail {
                             opcodes.push(OpCode::Ret)
@@ -262,12 +258,11 @@ impl Environment {
 type NativeFunc = fn(&mut Evaluator, OpaqueValue) -> Result<OpaqueValue>;
 
 fn native_plus(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
-    let pool = & evaluator.env.pool;
-    let mut result = pool.get_i32(0);
+    let mut result = obj::get_i32(0);
     for n in list_iterator(v) {
         if let Ok(num_value) = n {
             match (result.get_obj(), num_value.get_obj()) {
-                (Obj::I32(i), Obj::I32(j)) => {result = pool.get_i32(i+j)}
+                (Obj::I32(i), Obj::I32(j)) => {result = obj::get_i32(i+j)}
                 _ => {return Err(anyhow!("+ error:non-number given"))}
             }
         } else {
@@ -289,7 +284,7 @@ fn native_minus(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue
     for tail in list_iterator(v).skip(1) {
         match (result.get_obj(), tail.unwrap().get_obj()) {
             (Obj::I32(i), Obj::I32(j)) => {
-                result = evaluator.env.pool.get_i32(i-j);
+                result = obj::get_i32(i-j);
             }
             _ => {return Err(anyhow!("= error:cannot compare"))}
         }
@@ -306,13 +301,13 @@ fn native_eq(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
         match (head.get_obj(), tail.unwrap().get_obj()) {
             (Obj::I32(i), Obj::I32(j)) => {
                 if i != j {
-                    return Ok(evaluator.env.pool.get_false())
+                    return Ok(obj::get_false())
                 }
             }
             _ => {return Err(anyhow!("= error:cannot compare"))}
         }
     }
-    Ok(evaluator.env.pool.get_true())
+    Ok(obj::get_true())
 }
 
 fn native_car(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
@@ -343,7 +338,7 @@ fn native_cons(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue>
     }
     let car = list_nth(&v, 0).unwrap();
     let cdr = list_nth(&v, 1).unwrap();
-    Ok(evaluator.env.pool.alloc_cons(car, cdr)?)
+    Ok(obj::alloc_cons(car, cdr)?)
 }
 
 fn native_null_p(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
@@ -351,9 +346,9 @@ fn native_null_p(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValu
         return Err(anyhow!("null? error: args length != 1"))
     }
     if let Obj::Nil = list_nth(&v, 0).unwrap().get_obj() {
-        Ok(evaluator.env.pool.get_true())
+        Ok(obj::get_true())
     } else {
-        Ok(evaluator.env.pool.get_false())
+        Ok(obj::get_false())
     }
 }
 
@@ -362,8 +357,8 @@ fn native_write(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue
         return Err(anyhow!("write error: args length != 1"))
     }
     let v = list_nth(&v, 0).unwrap();
-    evaluator.env.pool.write(&mut evaluator.env.writer, &v)?;
-    Ok(evaluator.env.pool.get_undef())
+    obj::write(&mut evaluator.env.writer, &v)?;
+    Ok(obj::get_undef())
 }
 
 struct CallStack {
@@ -403,12 +398,12 @@ impl<'a> Evaluator<'a> {
         None
     }
     fn add_new_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
-        let frame = self.env.pool.ptr(frame);
+        let frame = obj::ptr(frame);
         if let Obj::Cons(cons) = frame.get_value().get_obj() {
-            let top_frame = self.env.pool.ptr(cons.get_car());
-            let new_pair = self.env.pool.alloc_cons(self.env.pool.get_symbol_from_idx(s), v)?;
-            let new_pair = self.env.pool.ptr(new_pair);
-            let new_top_frame = self.env.pool.alloc_cons(new_pair.get_value(), top_frame.get_value())?;
+            let top_frame = obj::ptr(cons.get_car());
+            let new_pair = obj::alloc_cons(obj::get_symbol_from_idx(s), v)?;
+            let new_pair = obj::ptr(new_pair);
+            let new_top_frame = obj::alloc_cons(new_pair.get_value(), top_frame.get_value())?;
             if let Obj::Cons(cons) = frame.get_value().get_obj() {
                 cons.set_car(new_top_frame);
             } else {
@@ -443,27 +438,25 @@ impl<'a> Evaluator<'a> {
     fn set_frame_previous(&mut self) {
         if let Obj::Cons(cons) = self.current_env.get_value().get_obj() {
             let prev_frame = cons.get_car();
-            self.current_env = self.env.pool.ptr(prev_frame)
+            self.current_env = obj::ptr(prev_frame)
         } else {
             panic!("unexpected environment format: not cons")
         }
     }
     fn set_new_frame(&mut self) -> Result<()> {
         let new_frame = self.create_new_frame()?;
-        self.current_env = self.env.pool.ptr(new_frame);
+        self.current_env = obj::ptr(new_frame);
         Ok(())
     }
     fn create_new_frame(&mut self) -> Result<OpaqueValue>{
-        let pool = &mut self.env.pool;
-        let new_frame = pool.get_nil();
-        pool.alloc_cons(new_frame, self.current_env.get_value())
+        let new_frame = obj::get_nil();
+        obj::alloc_cons(new_frame, self.current_env.get_value())
     }
     fn register_native_func(&mut self, name: &str, func: NativeFunc) -> Result<()> {
-        let pool = &mut self.env.pool;
-        let symbol_id = pool.get_symbol_idx(name);
+        let symbol_id = obj::get_symbol_idx(name);
         let idx = self.natives.len();
         self.natives.push(func);
-        let val = pool.get_native(idx as u32);
+        let val = obj::get_native(idx as u32);
         self.add_new_var(self.current_env.get_value(), symbol_id, val)
     }
     fn register_native_funcs(&mut self) -> Result<()> {
@@ -478,7 +471,7 @@ impl<'a> Evaluator<'a> {
         self.set_new_frame()
     }
     fn push_stack(&mut self, v: OpaqueValue) {
-        self.stack.push(self.env.pool.ptr(v))
+        self.stack.push(obj::ptr(v))
     }
     fn peek_stack(&mut self) -> Result<OpaqueValue> {
         Ok(self.stack.last().ok_or(anyhow!("eval error:trying to peek from empty stack"))?.get_value())
@@ -506,16 +499,15 @@ impl<'a> Evaluator<'a> {
         Ok(())
     }
     pub fn eval(env: &mut Environment, func_id: usize) -> Result<OpaqueValue> {
-        let pool = &mut env.pool;
-        let initial_env = pool.alloc_cons(
-            pool.get_nil(),
-            pool.get_nil()
+        let initial_env = obj::alloc_cons(
+            obj::get_nil(),
+            obj::get_nil()
         )?;
         let mut evaluator = Evaluator {
             current_func_id: func_id,
             current_ip: 0,
             stack: Vec::new(),
-            current_env: env.pool.ptr(initial_env),
+            current_env: obj::ptr(initial_env),
             env,
             natives: Vec::new(),
             call_stack: Vec::new(),
@@ -523,30 +515,30 @@ impl<'a> Evaluator<'a> {
         evaluator.register_native_funcs()?;
         loop {
             // eprintln!("func_id: {} ip:{} opcode:{:?}", evaluator.current_func_id, evaluator.current_ip, evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip]);
-            // eprintln!("current_env: {}", evaluator.env.pool.write_to_string(&evaluator.current_env.get_value()));
-            // eprintln!("stack top: {}", evaluator.peek_stack().map(|v| evaluator.env.pool.write_to_string(&v)).or_else(|_| Ok::<String, anyhow::Error>("no stack".to_string()))?);
+            // eprintln!("current_env: {}", obj::write_to_string(&evaluator.current_env.get_value()));
+            // eprintln!("stack top: {}", evaluator.peek_stack().map(|v| obj::write_to_string(&v)).or_else(|_| Ok::<String, anyhow::Error>("no stack".to_string()))?);
             match evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip] {
                 OpCode::PushI32(i) => {
-                    evaluator.push_stack(evaluator.env.pool.get_i32(i))
+                    evaluator.push_stack(obj::get_i32(i))
                 },
                 OpCode::PushConst(const_idx) => {
                     evaluator.push_stack(evaluator.env.consts[const_idx].get_value());
                 }
                 OpCode::PushNil => {
-                    evaluator.push_stack(evaluator.env.pool.get_nil())
+                    evaluator.push_stack(obj::get_nil())
                 },
                 OpCode::PushTrue => {
-                    evaluator.push_stack(evaluator.env.pool.get_true())
+                    evaluator.push_stack(obj::get_true())
                 },
                 OpCode::PushFalse => {
-                    evaluator.push_stack(evaluator.env.pool.get_false())
+                    evaluator.push_stack(obj::get_false())
                 },
                 OpCode::PushUndef => {
-                    evaluator.push_stack(evaluator.env.pool.get_undef())
+                    evaluator.push_stack(obj::get_undef())
                 },
                 OpCode::LookUp(s) => {
-                    // eprintln!("{}", evaluator.env.pool.write_to_string(&evaluator.current_env));
-                    let value = evaluator.lookup(s).ok_or(anyhow!("undefined symbol: {}", evaluator.env.pool.get_symbol_str(s)))?;
+                    // eprintln!("{}", obj::write_to_string(&evaluator.current_env));
+                    let value = evaluator.lookup(s).ok_or(anyhow!("undefined symbol: {}", obj::get_symbol_str(s)))?;
                     evaluator.push_stack(value)
                 },
                 OpCode::AddNewVar(s) => {
@@ -576,7 +568,7 @@ impl<'a> Evaluator<'a> {
                 OpCode::Cons => {
                     let cdr = evaluator.pop_stack()?;
                     let car = evaluator.pop_stack()?;
-                    let cons = evaluator.env.pool.alloc_cons(car, cdr)?;
+                    let cons = obj::alloc_cons(car, cdr)?;
                     evaluator.push_stack(cons);
                 },
                 OpCode::CarCdr => {
@@ -599,7 +591,7 @@ impl<'a> Evaluator<'a> {
                         },
                         Obj::Closure(closure) => {
                             let func_id = closure.get_func_id();
-                            let env = evaluator.env.pool.ptr(closure.get_env());
+                            let env = obj::ptr(closure.get_env());
                             evaluator.push_stack(evaluator.current_env.get_value());
                             evaluator.call_stack.push(
                                 CallStack { 
@@ -615,7 +607,7 @@ impl<'a> Evaluator<'a> {
                             evaluator.set_new_frame()?;
                             continue;
                         },
-                        _ => {return Err(anyhow!("eval error: not callable {:?}", evaluator.env.pool.write_to_string(&callee)))}
+                        _ => {return Err(anyhow!("eval error: not callable {:?}", obj::write_to_string(&callee)))}
                     }
                 },
                 OpCode::TailCall => {
@@ -634,7 +626,7 @@ impl<'a> Evaluator<'a> {
                         },
                         Obj::Closure(closure) => {
                             let func_id = closure.get_func_id();
-                            let env = evaluator.env.pool.ptr(closure.get_env());
+                            let env = obj::ptr(closure.get_env());
                             evaluator.push_stack(args.get_value());
                             evaluator.current_func_id = func_id as usize;
                             evaluator.current_ip = 0;
@@ -642,11 +634,11 @@ impl<'a> Evaluator<'a> {
                             evaluator.set_new_frame()?;
                             continue;
                         },
-                        _ => {return Err(anyhow!("eval error: not callable {:?}", evaluator.env.pool.write_to_string(&callee)))}
+                        _ => {return Err(anyhow!("eval error: not callable {:?}", obj::write_to_string(&callee)))}
                     }
                 }
                 OpCode::Closure(func_id) => {
-                    let closure = evaluator.env.pool.alloc_closure(func_id as FuncId, evaluator.current_env.get_value())?;
+                    let closure = obj::alloc_closure(func_id as FuncId, evaluator.current_env.get_value())?;
                     evaluator.push_stack(closure)
                 },
                 OpCode::Ret => {
@@ -694,9 +686,9 @@ mod tests {
         assert!(
             obj::equal(&result, &expected.get_value()),
             "{} evaluated to {} expected {}",
-            env.get_pool().write_to_string(&expr.get_value()),
-            env.get_pool().write_to_string(&result),
-            env.get_pool().write_to_string(&expected.get_value()),
+            obj::write_to_string(&expr.get_value()),
+            obj::write_to_string(&result),
+            obj::write_to_string(&expected.get_value()),
         );
         Ok(())
     }
@@ -707,18 +699,19 @@ mod tests {
         path.push("tests/small_tests.scm");
         let tests = std::fs::read_to_string(path).unwrap();
         let mut env = Environment::new();
-        let parsed = parser::parse(&tests, &mut env.pool).unwrap();
-        env.pool.force_gc_every_alloc = true;
-        let mut current = env.pool.ptr(parsed);
+        let parsed = parser::parse(&tests,).unwrap();
+        obj::set_force_gc_every_alloc(true);
+        let mut current = obj::ptr(parsed);
         while let Obj::Cons(cons) = current.get_value().get_obj() {
-            current = env.pool.ptr(cons.get_cdr());
-            let pair = env.pool.ptr(cons.get_car());
-            let expr = env.pool.ptr(obj::list_nth(&pair.get_value(), 0).unwrap());
-            // eprintln!("evaluating {}", env.get_pool().write_to_string(&expr.get_value()));
-            let expected = env.pool.ptr(obj::list_nth(&pair.get_value(), 1).unwrap());
+            current = obj::ptr(cons.get_cdr());
+            let pair = obj::ptr(cons.get_car());
+            let expr = obj::ptr(obj::list_nth(&pair.get_value(), 0).unwrap());
+            // eprintln!("evaluating {}", obj::write_to_string(&expr.get_value()));
+            let expected = obj::ptr(obj::list_nth(&pair.get_value(), 1).unwrap());
             assert_evaluated_to(&mut env, &expr, &expected).map_err(|err|
-                anyhow!("error evaluating {}:{}", env.pool.write_to_string(&expr.get_value()), err)
+                anyhow!("error evaluating {}:{}", obj::write_to_string(&expr.get_value()), err)
             ).unwrap();
         }
+        obj::set_force_gc_every_alloc(false);
     }
 }
