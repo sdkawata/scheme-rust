@@ -39,40 +39,42 @@ struct ObjHead {
 #[repr(C)]
 struct ObjCons {
     head: ObjHead,
-    car: Value,
-    cdr: Value,
+    car: RawValue,
+    cdr: RawValue,
 }
 
 #[repr(C)]
 struct ObjClosure {
     head: ObjHead,
     func_id: FuncId,
-    env: Value,
+    env: RawValue,
 }
 
 
 #[repr(C)]
 struct ObjForwarded {
     head: ObjHead,
-    forwarded: Value,
+    forwarded: RawValue,
 }
 
 #[repr(C)]
-#[derive(Debug, Clone)]
-pub struct OpaqueValue(Value);
+#[derive(Clone, Copy)]
+struct RawValue{
+    value: Value
+}
 
-impl OpaqueValue {
-    fn from_objhead_ptr(ptr:*mut ObjHead) -> Self{
-        OpaqueValue(unsafe {std::mem::transmute(ptr)} )
+impl RawValue {
+    unsafe fn from_objhead_ptr(ptr:*mut ObjHead) -> Self{
+        RawValue{value: std::mem::transmute(ptr)}
     }
     fn from_value(value: u32, value_type: ValueType) -> Self {
-        OpaqueValue(((value as u64) << 32) + ((value_type as u64) << 1) + 1)
+        RawValue{value: ((value as u64) << 32) + ((value_type as u64) << 1) + 1}
     }
-    fn as_ptr(&self) -> *mut ObjHead {
-        unsafe{ std::mem::transmute(self.0) }
+    unsafe fn as_ptr<T>(&self) -> *mut T {
+        std::mem::transmute(self.value)
     }
     fn is_value(&self) -> bool {
-        self.0 %2 == 1
+        self.value %2 == 1
     }
     unsafe fn obj_type(&self) -> ObjType {
         debug_assert!(!self.is_value());
@@ -87,75 +89,129 @@ impl OpaqueValue {
             ObjType::Forwarded => size_of::<ObjForwarded>(),
         }
     }
-    pub fn get_obj(&self) -> Obj {
-        if self.is_value() {
-            // value
-            let value = (self.0 >> 32) as u32;
-            let value_type = ((self.0 & 0xffff) >> 1) as u64;
-            if value_type == ValueType::I32 as u64 {
-                Obj::I32(value as i32)
-            } else if value_type == ValueType::Nil as u64 {
-                Obj::Nil
-            } else if value_type == ValueType::Symbol as u64 {
-                Obj::Symbol(value)
-            } else if value_type == ValueType::Native as u64 {
-                Obj::Native(value)
-            } else if value_type == ValueType::True as u64 {
-                Obj::True
-            } else if value_type == ValueType::False as u64 {
-                Obj::False
-            } else if value_type == ValueType::Undef as u64 {
-                Obj::Undef
-            } else {
-                panic!("unexpected value type {}", value_type)
-            }
-        } else {
-            // pointer
-            match unsafe { self.obj_type() } {
-                ObjType::Cons => Obj::Cons(OpaqueValueCons(self.0 as *mut ObjCons)),
-                ObjType::Closure => Obj::Closure(OpaqueValueClosure(self.0 as *mut ObjClosure)),
-                ObjType::Forwarded => Obj::Forwarded(OpaqueValueForwarded(self.0 as *mut ObjForwarded)),
+    unsafe fn value(&self) -> u32 {
+        debug_assert!(self.is_value());
+        (self.value >> 32) as u32
+    }
+    unsafe fn value_type(&self) -> ValueType {
+        debug_assert!(self.is_value());
+        let value_type = ((self.value & 0xffff) >> 1) as u64;
+        match value_type {
+            v if v == ValueType::Nil as u64 => ValueType::Nil,
+            v if v == ValueType::I32 as u64 => ValueType::I32,
+            v if v == ValueType::True as u64 => ValueType::True,
+            v if v == ValueType::False as u64 => ValueType::False,
+            v if v == ValueType::Undef as u64 => ValueType::Undef,
+            v if v == ValueType::Symbol as u64 => ValueType::Symbol,
+            v if v == ValueType::Native as u64 => ValueType::Native,
+            _ => panic!("unexpected value type {}", value_type),
+        }
+    }
+}
+
+impl From<Ptr> for RawValue {
+    fn from(item: Ptr) -> RawValue {
+       unsafe {(*item.0.as_ptr()).value}
+    }
+}
+
+impl From<OpaqueValue> for RawValue {
+    fn from(item: OpaqueValue) -> RawValue {
+        match item.0 {
+            ValueOrPtr::Value(value) => value,
+            ValueOrPtr::Ptr(ptr) => ptr.into(),
+        }
+    } 
+}
+
+#[derive(Clone)]
+enum ValueOrPtr {
+    Value(RawValue),
+    Ptr(Ptr)
+}
+
+#[derive(Clone)]
+pub struct OpaqueValue(ValueOrPtr);
+
+impl OpaqueValue {
+    pub fn get_obj(self) -> Obj {
+        match self.0 {
+            ValueOrPtr::Value(raw_value) => {
+                let value = unsafe { raw_value.value() };
+                let value_type = unsafe { raw_value.value_type() };
+                match value_type {
+                    ValueType::I32 => Obj::I32(value as i32),
+                    ValueType::Nil => Obj::Nil,
+                    ValueType::Symbol => Obj::Symbol(value),
+                    ValueType::Native => Obj::Native(value),
+                    ValueType::True => Obj::True,
+                    ValueType::False => Obj::False,
+                    ValueType::Undef => Obj::Undef,
+                }
+            },
+            ValueOrPtr::Ptr(ptr) => {
+                match unsafe {ptr.get_raw_value().obj_type() } {
+                    ObjType::Cons => Obj::Cons(OpaqueValueCons(ptr)),
+                    ObjType::Closure => Obj::Closure(OpaqueValueClosure(ptr)),
+                    ObjType::Forwarded => Obj::Forwarded(OpaqueValueForwarded(ptr)),
+                }
             }
         }
     }
 }
 
+impl From<RawValue> for OpaqueValue {
+    fn from(item: RawValue) -> OpaqueValue {
+        if item.is_value() {
+            OpaqueValue(ValueOrPtr::Value(item))
+        } else {
+            OpaqueValue(ValueOrPtr::Ptr(item.into()))
+        }
+    }
+}
 
-#[derive(Debug, Clone)]
-pub struct OpaqueValueCons(*mut ObjCons);
+
+#[derive(Clone)]
+pub struct OpaqueValueCons(Ptr);
 
 impl OpaqueValueCons {
+    unsafe fn as_ptr(&self) -> *mut ObjCons {
+        self.0.get_raw_value().as_ptr::<ObjCons>()
+    }
     pub fn set_car(&self, v: OpaqueValue) {
-        unsafe {(*self.0).car = v.0;}
+        unsafe {(*self.as_ptr()).car = v.into();}
     }
     pub fn set_cdr(&self, v: OpaqueValue) {
-        unsafe {(*self.0).cdr = v.0;}
+        unsafe {(*self.as_ptr()).cdr = v.into();}
     }
     pub fn get_car(&self) -> OpaqueValue {
-        OpaqueValue(unsafe {(*self.0).car})
+        unsafe {(*self.as_ptr()).car}.into()
     }
     pub fn get_cdr(&self) -> OpaqueValue {
-        OpaqueValue(unsafe {(*self.0).cdr})
+        unsafe {(*self.as_ptr()).cdr}.into()
     }
 }
 
 
-#[derive(Debug, Clone)]
-pub struct OpaqueValueForwarded(*mut ObjForwarded);
+#[derive(Clone)]
+pub struct OpaqueValueForwarded(Ptr);
 
-#[derive(Debug, Clone)]
-pub struct OpaqueValueClosure(*mut ObjClosure);
+#[derive(Clone)]
+pub struct OpaqueValueClosure(Ptr);
 
 impl OpaqueValueClosure {
+    unsafe fn as_ptr(&self) -> *mut ObjClosure {
+       self.0.get_raw_value().as_ptr::<ObjClosure>()
+    }
     pub fn get_func_id(&self) -> FuncId {
-        unsafe {(*self.0).func_id}
+        unsafe {(*self.as_ptr()).func_id}
     }
     pub fn get_env(&self) -> OpaqueValue {
-        OpaqueValue(unsafe {(*self.0).env})
+        unsafe {(*self.as_ptr()).env}.into()
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Obj {
     Nil,
     True,
@@ -172,17 +228,17 @@ pub enum Obj {
 struct PtrNode {
     next: Option<NonNull<PtrNode>>,
     prev: Option<NonNull<PtrNode>>,
-    element: OpaqueValue,
+    value: RawValue,
 }
 
 impl PtrNode {
-    fn new_ptr(value: OpaqueValue) -> NonNull<PtrNode> {
+    fn new_ptr(value: RawValue) -> NonNull<PtrNode> {
         Box::leak(
             Box::new(
                 PtrNode {
                     prev: None,
                     next: None,
-                    element: value,
+                    value: value,
                 }
             )
         ).into()
@@ -192,8 +248,14 @@ impl PtrNode {
 pub struct Ptr(NonNull<PtrNode>);
 
 impl Ptr {
-    pub fn get_value(&self) -> OpaqueValue {
-        unsafe {(*self.0.as_ptr()).element.clone()}
+    fn get_raw_value(&self) -> RawValue {
+        unsafe { (*self.0.as_ptr()).value}
+    }
+}
+
+impl From<RawValue> for Ptr {
+    fn from(item: RawValue) -> Ptr {
+        OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().ptr(item))
     }
 }
 
@@ -210,6 +272,12 @@ impl Drop for Ptr {
             }
             let _ = Box::from_raw(self.0.as_ptr()); // free ptr
         }
+    }
+}
+
+impl Clone for Ptr {
+    fn clone(&self) -> Self {
+        self.get_raw_value().into()
     }
 }
 
@@ -240,8 +308,8 @@ impl ObjPool {
     pub fn new(size: usize) -> Self {
         let layout = Layout::from_size_align(size * 2, 8).unwrap();
         let ptr = unsafe { System.alloc(layout)};
-        let head_entry: NonNull<PtrNode> = PtrNode::new_ptr(OpaqueValue::from_value(0, ValueType::Nil));
-        let tail_entry: NonNull<PtrNode> = PtrNode::new_ptr(OpaqueValue::from_value(0, ValueType::Nil));
+        let head_entry: NonNull<PtrNode> = PtrNode::new_ptr(get_nil().into());
+        let tail_entry: NonNull<PtrNode> = PtrNode::new_ptr(get_nil().into());
         unsafe {
             (*head_entry.as_ptr()).next = Some(tail_entry);
             (*tail_entry.as_ptr()).prev = Some(head_entry);
@@ -261,10 +329,10 @@ impl ObjPool {
             force_gc_every_alloc: false,
         }
     }
-    fn ptr(&mut self, value: OpaqueValue) -> Ptr {
+    fn ptr(&mut self, value: RawValue) -> Ptr {
         //eprintln!("from_space:{:?} to_space:{:?} pool_size:{} ptr:{:?}", self.from_space, self.to_space,self.pool_size, value.as_ptr());
-        debug_assert!(value.is_value() || (value.as_ptr() as *mut u8) >= self.from_space);
-        debug_assert!(unsafe{ value.is_value() || (value.as_ptr() as *mut u8) < self.from_space.add(self.pool_size) });
+        debug_assert!(unsafe{ value.is_value() || (value.as_ptr::<u8>()) >= self.from_space});
+        debug_assert!(unsafe{ value.is_value() || (value.as_ptr::<u8>()) < self.from_space.add(self.pool_size) });
         let new_entry = PtrNode::new_ptr(value);
         unsafe {
             let second_last_entry = (*self.tail_entry.as_ptr()).prev.unwrap();
@@ -295,25 +363,25 @@ impl ObjPool {
         self.init_obj_head(ptr, value, obj_type);
         Ok(ptr)
     }
-    unsafe fn copy_obj(&mut self, value: OpaqueValue) -> OpaqueValue {
+    unsafe fn copy_obj(&mut self, value: RawValue) -> RawValue {
         if value.is_value() {
             return value;
         }
         //eprintln!("copy_obj ptr:{:?} current:{:?} type:{:?} size:{} obj:{}", value.as_ptr(), self.current, value.obj_type(), value.obj_size(), self.write_to_string(&value));
-        debug_assert!((value.as_ptr() as *mut u8) >= self.to_space);
-        debug_assert!((value.as_ptr() as *mut u8) < self.to_space.add(self.pool_size));
-        match value.get_obj() {
-            Obj::Forwarded(forwarded) => {
-                OpaqueValue((*forwarded.0).forwarded)
+        debug_assert!(unsafe{(value.as_ptr::<u8>()) >= self.to_space});
+        debug_assert!(unsafe{(value.as_ptr::<u8>()) < self.to_space.add(self.pool_size)});
+        match value.obj_type() {
+            ObjType::Forwarded => {
+                (*value.as_ptr::<ObjForwarded>()).forwarded
             },
             _ => {
-                let forwarding_addr = self.current;
+                let forwarded_addr = self.current;
                 self.current = self.current.add(value.obj_size());
-                std::ptr::copy_nonoverlapping(value.as_ptr() as *mut u8, forwarding_addr, value.obj_size());
+                std::ptr::copy_nonoverlapping(value.as_ptr() as *mut u8, forwarded_addr, value.obj_size());
                 self.init_obj_head(value.as_ptr(), 0, ObjType::Forwarded);
-                let forwarded_ptr = value.as_ptr() as *mut ObjForwarded;
-                (*forwarded_ptr).forwarded = forwarding_addr as Value;
-                OpaqueValue::from_objhead_ptr(forwarding_addr as *mut ObjHead)
+                let forwarded = RawValue::from_objhead_ptr(forwarded_addr as *mut ObjHead);
+                (*value.as_ptr::<ObjForwarded>()).forwarded = forwarded;
+                forwarded
             }
         }
     }
@@ -326,19 +394,21 @@ impl ObjPool {
         let mut current_entry = Some(self.head_entry);
         while let Some(entry) = current_entry {
             // eprintln!("ptr:{:?}", (*entry.as_ptr()).element.as_ptr());
-            (*entry.as_ptr()).element = self.copy_obj((*entry.as_ptr()).element.clone());
+            (*entry.as_ptr()).value = self.copy_obj((*entry.as_ptr()).value);
             current_entry = (*entry.as_ptr()).next;
         }
         while scan_ptr < self.current {
-            let current_value = OpaqueValue::from_objhead_ptr(scan_ptr as *mut ObjHead);
+            let current_value = RawValue::from_objhead_ptr(scan_ptr as *mut ObjHead);
             //eprintln!("scan {:?} current:{:?} type:{:?} {}", scan_ptr, self.current, current_value.obj_type(), self.write_to_string(&current_value));
-            match current_value.get_obj() {
-                Obj::Cons(cons) => {
-                    cons.set_car(self.copy_obj(cons.get_car()));
-                    cons.set_cdr(self.copy_obj(cons.get_cdr()));
+            match current_value.obj_type() {
+                ObjType::Cons => {
+                    let ptr = current_value.as_ptr::<ObjCons>();
+                    (*ptr).car = self.copy_obj((*ptr).car);
+                    (*ptr).cdr = self.copy_obj((*ptr).cdr);
                 },
-                Obj::Closure(closure) => {
-                    (*closure.0).env = self.copy_obj(closure.get_env()).0
+                ObjType::Closure => {
+                    let ptr = current_value.as_ptr::<ObjClosure>();
+                    (*ptr).env = self.copy_obj((*ptr).env)
                 }
                 _ => panic!("unreachable")
             }
@@ -363,48 +433,49 @@ impl ObjPool {
 
 
 pub fn get_i32(i: i32) -> OpaqueValue {
-    OpaqueValue::from_value(i as u32, ValueType::I32)
+    RawValue::from_value(i as u32, ValueType::I32).into()
 }
 pub fn get_native(i: NativeId) -> OpaqueValue {
-    OpaqueValue::from_value(i as u32, ValueType::Native)
+    RawValue::from_value(i as u32, ValueType::Native).into()
 }
 pub fn get_nil() -> OpaqueValue {
-    OpaqueValue::from_value(0, ValueType::Nil)
+    RawValue::from_value(0, ValueType::Nil).into()
 }
 pub fn get_true() -> OpaqueValue {
-    OpaqueValue::from_value(0, ValueType::True)
+    RawValue::from_value(0, ValueType::True).into()
 }
 pub fn get_false() -> OpaqueValue {
-    OpaqueValue::from_value(0, ValueType::False)
+    RawValue::from_value(0, ValueType::False).into()
 }
 pub fn get_undef() -> OpaqueValue {
-    OpaqueValue::from_value(0, ValueType::Undef)
+    RawValue::from_value(0, ValueType::Undef).into()
 }
 
 
 pub fn alloc_cons(car: OpaqueValue, cdr: OpaqueValue) -> Result<OpaqueValue> {
     OBJ_POOL.with(|obj_pool| {
-        let car = obj_pool.borrow_mut().ptr(car);
-        let cdr = obj_pool.borrow_mut().ptr(cdr);
-        let ptr = unsafe { obj_pool.borrow_mut().alloc(size_of::<ObjCons>(), 0, ObjType::Cons)? };
         unsafe {
-            let ptr = ptr as *mut ObjCons;
-            (*ptr).car = car.get_value().0;
-            (*ptr).cdr = cdr.get_value().0;
+            let ptr = obj_pool.borrow_mut().alloc(size_of::<ObjCons>(), 0, ObjType::Cons)?;
+            {
+                let ptr = ptr as *mut ObjCons;
+                (*ptr).car = car.into();
+                (*ptr).cdr = cdr.into();
+            }
+            Ok(RawValue::from_objhead_ptr(ptr).into())
         }
-        Ok(OpaqueValue::from_objhead_ptr(ptr))
     })
 }
 pub fn alloc_closure(func_id: FuncId, env: OpaqueValue) -> Result<OpaqueValue> {
     OBJ_POOL.with(|obj_pool| {
-        let env = obj_pool.borrow_mut().ptr(env);
-        let ptr = unsafe { obj_pool.borrow_mut().alloc(size_of::<ObjClosure>(), 0, ObjType::Closure)? };
         unsafe {
-            let ptr = ptr as *mut ObjClosure;
-            (*ptr).func_id = func_id;
-            (*ptr).env = env.get_value().0;
+            let ptr = obj_pool.borrow_mut().alloc(size_of::<ObjClosure>(), 0, ObjType::Closure)?;
+            {
+                let ptr = ptr as *mut ObjClosure;
+                (*ptr).func_id = func_id;
+                (*ptr).env = env.into();
+            }
+            Ok(RawValue::from_objhead_ptr(ptr).into())
         }
-        Ok(OpaqueValue::from_objhead_ptr(ptr))
     })
 }
 
@@ -412,7 +483,7 @@ pub fn get_symbol_str(idx: SymbolId) -> String {
     OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_str(idx))
 }
 pub fn get_symbol_from_idx(idx: SymbolId) -> OpaqueValue {
-    OpaqueValue::from_value(idx, ValueType::Symbol)
+    RawValue::from_value(idx, ValueType::Symbol).into()
 }
 pub fn get_symbol_idx(str: &str) -> SymbolId {
     OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_idx(str))
@@ -423,14 +494,14 @@ pub fn write_to_string(v: &OpaqueValue) -> String {
     String::from_utf8(buf).unwrap()
 }
 pub fn write<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
-    match v.get_obj() {
+    match v.clone().get_obj() {
         Obj::Nil => {write!(w, "()")?;}
         Obj::True => {write!(w, "#t")?;}
         Obj::False => {write!(w, "#f")?;}
         Obj::Undef => {write!(w, "#undef")?;}
         Obj::I32(i) => {write!(w, "{}",i)?;}
         Obj::Native(i) => {write!(w, "#native:{}#", i)?;}
-        Obj::Symbol(s) => {write!(w, "{}", OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_str(s)));}
+        Obj::Symbol(s) => {write!(w, "{}", OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_str(s)))?;}
         Obj::Cons(_) => {write_list(w, v)?;}
         Obj::Closure(_) => {write!(w, "#closure#")?;}
         Obj::Forwarded(_) => {write!(w, "#forwarded#")?;}
@@ -442,7 +513,7 @@ fn write_list<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
     let mut current: OpaqueValue = v.to_owned();
     let mut first = true;
     loop {
-        match current.get_obj() {
+        match current.clone().get_obj() {
             Obj::Cons(cons) => {
                 if !first {
                     write!(w, " ")?;
@@ -476,12 +547,9 @@ pub fn set_force_gc_every_alloc(force_gc_every_alloc: bool) {
     OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().force_gc_every_alloc = force_gc_every_alloc )
 }
 
-pub fn ptr(value: OpaqueValue) -> Ptr {
-    OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().ptr(value))
-}
 
 pub fn equal(v1: &OpaqueValue, v2: &OpaqueValue) -> bool {
-    match (v1.get_obj(), v2.get_obj()) {
+    match (v1.to_owned().get_obj(), v2.to_owned().get_obj()) {
         (Obj::True, Obj::True) => true,
         (Obj::False, Obj::False) => true,
         (Obj::Undef, Obj::Undef) => true,
@@ -500,7 +568,7 @@ struct ListIterator {
 impl Iterator for ListIterator {
     type Item = Result<OpaqueValue>;
     fn next(&mut self) -> Option<Self::Item> {
-        match self.current.get_obj() {
+        match self.current.to_owned().get_obj() {
             Obj::Cons(cons) => {
                 let car = cons.get_car();
                 self.current = cons.get_cdr();
@@ -508,7 +576,7 @@ impl Iterator for ListIterator {
             },
             Obj::Nil => None,
             _ => {
-                self.current = OpaqueValue::from_value(0, ValueType::Nil);
+                self.current = get_nil();
                 Some(Err(anyhow!("not list")))
             }
         }
@@ -535,7 +603,7 @@ pub fn list_length(v: &OpaqueValue) -> Option<usize> {
 }
 
 pub fn list_nth(v: &OpaqueValue, idx: usize) -> Option<OpaqueValue> {
-    match v.get_obj() {
+    match v.to_owned().get_obj() {
         Obj::Cons(ref cons) => {
             if idx == 0 {
                 Some(cons.get_car())

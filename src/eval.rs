@@ -1,6 +1,6 @@
 use std::io::{Write, stdout};
 use crate::obj;
-use crate::obj::{OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId, Ptr};
+use crate::obj::{OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId};
 use anyhow::{Result, anyhow};
 
 #[derive(Debug)]
@@ -35,7 +35,7 @@ struct Func {
 
 pub struct Environment {
     funcs: Vec<Func>,
-    consts: Vec<Ptr>,
+    consts: Vec<OpaqueValue>,
     writer: Box<dyn Write>,
 }
 
@@ -76,7 +76,7 @@ impl Environment {
         Ok(idx)
     }
     fn emit_cons(&mut self, opcodes: &mut Vec<OpCode>, v:&OpaqueValue) -> Result<()> {
-        match v.get_obj() {
+        match v.to_owned().get_obj() {
             Obj::Cons(cons) => {
                 self.emit_rec(opcodes, &cons.get_car(), false)?;
                 self.emit_cons(opcodes, &cons.get_cdr())?;
@@ -92,7 +92,7 @@ impl Environment {
     }
     fn emit_rec(&mut self, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, tail: bool) -> Result<()> {
         // eprintln!("v:{} tail:{}", self.pool.write_to_string(v), tail);
-        match v.get_obj() {
+        match v.to_owned().get_obj() {
             Obj::I32(i) => {
                 opcodes.push(OpCode::PushI32(i));
                 if tail {
@@ -229,7 +229,7 @@ impl Environment {
                         }
                         let quoted = list_nth(&v, 1).unwrap();
                         let idx = self.consts.len();
-                        self.consts.push(obj::ptr(quoted));
+                        self.consts.push(quoted);
                         opcodes.push(OpCode::PushConst(idx));
                         if tail {
                             opcodes.push(OpCode::Ret)
@@ -257,7 +257,7 @@ impl Environment {
 
 type NativeFunc = fn(&mut Evaluator, OpaqueValue) -> Result<OpaqueValue>;
 
-fn native_plus(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+fn native_plus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
     let mut result = obj::get_i32(0);
     for n in list_iterator(v) {
         if let Ok(num_value) = n {
@@ -272,12 +272,12 @@ fn native_plus(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue>
     Ok(result)
 }
 
-fn native_minus(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+fn native_minus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
     if list_length(&v).ok_or(anyhow!("= error: args not list"))? < 2 {
         return Err(anyhow!("= error: length < 2"))
     }
     let head = list_nth(&v, 0).unwrap();
-    let mut result = match head.get_obj() {
+    let mut result = match head.clone().get_obj() {
         Obj::I32(_) => head,
         _ => {return Err(anyhow!("- error: not number"))}
     };
@@ -292,13 +292,13 @@ fn native_minus(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue
     Ok(result)
 }
 
-fn native_eq(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+fn native_eq(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
     if list_length(&v).ok_or(anyhow!("= error: args not list"))? < 2 {
         return Err(anyhow!("= error: length < 2"))
     }
-    let head = list_nth(&v, 0).unwrap();
+    let head_obj = list_nth(&v, 0).unwrap().get_obj();
     for tail in list_iterator(v).skip(1) {
-        match (head.get_obj(), tail.unwrap().get_obj()) {
+        match (head_obj.clone(), tail.unwrap().get_obj()) {
             (Obj::I32(i), Obj::I32(j)) => {
                 if i != j {
                     return Ok(obj::get_false())
@@ -332,7 +332,7 @@ fn native_cdr(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue>
     }
 }
 
-fn native_cons(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+fn native_cons(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
     if list_length(&v) != Some(2) {
         return Err(anyhow!("cons error: args length != 2"))
     }
@@ -341,7 +341,7 @@ fn native_cons(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue>
     Ok(obj::alloc_cons(car, cdr)?)
 }
 
-fn native_null_p(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+fn native_null_p(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
     if list_length(&v) != Some(1) {
         return Err(anyhow!("null? error: args length != 1"))
     }
@@ -370,8 +370,8 @@ struct CallStack {
 pub struct Evaluator<'a> {
     current_func_id: usize,
     current_ip: usize,
-    stack: Vec<Ptr>,
-    current_env: Ptr, // envronment is list of list of pair (key(symbol), value)
+    stack: Vec<OpaqueValue>,
+    current_env: OpaqueValue, // envronment is list of list of pair (key(symbol), value)
     env: & 'a mut Environment,
     natives: Vec<NativeFunc>,
     call_stack: Vec<CallStack>,
@@ -379,7 +379,7 @@ pub struct Evaluator<'a> {
 
 impl<'a> Evaluator<'a> {
     fn lookup(&self, s:SymbolId) -> Option<OpaqueValue> {
-        for frame in list_iterator(self.current_env.get_value()) {
+        for frame in list_iterator(self.current_env.clone()) {
             let frame = frame.unwrap();
             for pair in list_iterator(frame) {
                 if let Obj::Cons(cons) = pair.unwrap().get_obj() {
@@ -398,17 +398,11 @@ impl<'a> Evaluator<'a> {
         None
     }
     fn add_new_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
-        let frame = obj::ptr(frame);
-        if let Obj::Cons(cons) = frame.get_value().get_obj() {
-            let top_frame = obj::ptr(cons.get_car());
+        if let Obj::Cons(cons) = frame.clone().get_obj() {
+            let top_frame = cons.get_car();
             let new_pair = obj::alloc_cons(obj::get_symbol_from_idx(s), v)?;
-            let new_pair = obj::ptr(new_pair);
-            let new_top_frame = obj::alloc_cons(new_pair.get_value(), top_frame.get_value())?;
-            if let Obj::Cons(cons) = frame.get_value().get_obj() {
-                cons.set_car(new_top_frame);
-            } else {
-                panic!("incositent state")
-            }
+            let new_top_frame = obj::alloc_cons(new_pair, top_frame)?;
+            cons.set_car(new_top_frame);
             // println!("env: {}", pool.write_to_string(&self.current_env));
             Ok(())
         } else {
@@ -436,28 +430,28 @@ impl<'a> Evaluator<'a> {
         Err(anyhow!("cannot set var: not found"))
     }
     fn set_frame_previous(&mut self) {
-        if let Obj::Cons(cons) = self.current_env.get_value().get_obj() {
+        if let Obj::Cons(cons) = self.current_env.clone().get_obj() {
             let prev_frame = cons.get_car();
-            self.current_env = obj::ptr(prev_frame)
+            self.current_env = prev_frame
         } else {
             panic!("unexpected environment format: not cons")
         }
     }
     fn set_new_frame(&mut self) -> Result<()> {
         let new_frame = self.create_new_frame()?;
-        self.current_env = obj::ptr(new_frame);
+        self.current_env = new_frame;
         Ok(())
     }
     fn create_new_frame(&mut self) -> Result<OpaqueValue>{
         let new_frame = obj::get_nil();
-        obj::alloc_cons(new_frame, self.current_env.get_value())
+        obj::alloc_cons(new_frame, self.current_env.clone())
     }
     fn register_native_func(&mut self, name: &str, func: NativeFunc) -> Result<()> {
         let symbol_id = obj::get_symbol_idx(name);
         let idx = self.natives.len();
         self.natives.push(func);
         let val = obj::get_native(idx as u32);
-        self.add_new_var(self.current_env.get_value(), symbol_id, val)
+        self.add_new_var(self.current_env.clone(), symbol_id, val)
     }
     fn register_native_funcs(&mut self) -> Result<()> {
         self.register_native_func("+", native_plus)?;
@@ -471,16 +465,13 @@ impl<'a> Evaluator<'a> {
         self.set_new_frame()
     }
     fn push_stack(&mut self, v: OpaqueValue) {
-        self.stack.push(obj::ptr(v))
+        self.stack.push(v)
     }
     fn peek_stack(&mut self) -> Result<OpaqueValue> {
-        Ok(self.stack.last().ok_or(anyhow!("eval error:trying to peek from empty stack"))?.get_value())
-    }
-    fn pop_stack_ptr(&mut self) -> Result<Ptr> {
-        self.stack.pop().ok_or(anyhow!("eval error:trying to pop from empty stack"))
+        Ok(self.stack.last().ok_or(anyhow!("eval error:trying to peek from empty stack"))?.clone())
     }
     fn pop_stack(&mut self) -> Result<OpaqueValue> {
-        Ok(self.pop_stack_ptr()?.get_value())
+        self.stack.pop().ok_or(anyhow!("eval error:trying to pop from empty stack"))
     }
     fn shrink_stack(&mut self, target_len:usize) {
         if target_len > self.stack.len() {
@@ -494,7 +485,7 @@ impl<'a> Evaluator<'a> {
         self.current_func_id = stack_top.ret_func_id;
         self.current_ip = stack_top.ret_ip;
         self.shrink_stack(stack_top.ret_base_pointer);
-        self.current_env = self.pop_stack_ptr()?;
+        self.current_env = self.pop_stack()?;
         self.push_stack(retval);
         Ok(())
     }
@@ -507,7 +498,7 @@ impl<'a> Evaluator<'a> {
             current_func_id: func_id,
             current_ip: 0,
             stack: Vec::new(),
-            current_env: obj::ptr(initial_env),
+            current_env: initial_env,
             env,
             natives: Vec::new(),
             call_stack: Vec::new(),
@@ -522,7 +513,7 @@ impl<'a> Evaluator<'a> {
                     evaluator.push_stack(obj::get_i32(i))
                 },
                 OpCode::PushConst(const_idx) => {
-                    evaluator.push_stack(evaluator.env.consts[const_idx].get_value());
+                    evaluator.push_stack(evaluator.env.consts[const_idx].clone());
                 }
                 OpCode::PushNil => {
                     evaluator.push_stack(obj::get_nil())
@@ -548,14 +539,14 @@ impl<'a> Evaluator<'a> {
                 },
                 OpCode::AddNewVarCurrent(s) => {
                     let value = evaluator.pop_stack()?;
-                    evaluator.add_new_var(evaluator.current_env.get_value(), s, value)?;
+                    evaluator.add_new_var(evaluator.current_env.clone(), s, value)?;
                 },
                 OpCode::SetVarCurrent(s) => {
                     let value = evaluator.pop_stack()?;
-                    evaluator.set_var(evaluator.current_env.get_value(), s, value)?;
+                    evaluator.set_var(evaluator.current_env.clone(), s, value)?;
                 },
                 OpCode::PopAndSetFrame => {
-                    let frame = evaluator.pop_stack_ptr()?;
+                    let frame = evaluator.pop_stack()?;
                     evaluator.current_env = frame;
                 }
                 OpCode::SetFramePrevious => {
@@ -581,18 +572,18 @@ impl<'a> Evaluator<'a> {
                     }
                 }
                 OpCode::Call => {
-                    let args = evaluator.pop_stack_ptr().unwrap();
+                    let args = evaluator.pop_stack().unwrap();
                     let callee = evaluator.pop_stack().unwrap();
-                    match callee.get_obj() {
+                    match callee.clone().get_obj() {
                         Obj::Native(i) => {
                             let fun = evaluator.natives[i as usize];
-                            let retval = fun(&mut evaluator, args.get_value())?;
+                            let retval = fun(&mut evaluator, args)?;
                             evaluator.push_stack(retval)
                         },
                         Obj::Closure(closure) => {
                             let func_id = closure.get_func_id();
-                            let env = obj::ptr(closure.get_env());
-                            evaluator.push_stack(evaluator.current_env.get_value());
+                            let env = closure.get_env();
+                            evaluator.push_stack(evaluator.current_env.clone());
                             evaluator.call_stack.push(
                                 CallStack { 
                                     ret_func_id: evaluator.current_func_id,
@@ -600,7 +591,7 @@ impl<'a> Evaluator<'a> {
                                     ret_base_pointer: evaluator.stack.len()
                                 }
                             );
-                            evaluator.push_stack(args.get_value());
+                            evaluator.push_stack(args);
                             evaluator.current_func_id = func_id as usize;
                             evaluator.current_ip = 0;
                             evaluator.current_env = env;
@@ -611,12 +602,12 @@ impl<'a> Evaluator<'a> {
                     }
                 },
                 OpCode::TailCall => {
-                    let args = evaluator.pop_stack_ptr().unwrap();
+                    let args = evaluator.pop_stack().unwrap();
                     let callee = evaluator.pop_stack().unwrap();
-                    match callee.get_obj() {
+                    match callee.clone().get_obj() {
                         Obj::Native(i) => {
                             let fun = evaluator.natives[i as usize];
-                            let retval = fun(&mut evaluator, args.get_value())?;
+                            let retval = fun(&mut evaluator, args)?;
                             if let Some(call_stack) = evaluator.call_stack.pop() {
                                 evaluator.proc_ret(call_stack, retval)?;
                                 continue;
@@ -626,8 +617,8 @@ impl<'a> Evaluator<'a> {
                         },
                         Obj::Closure(closure) => {
                             let func_id = closure.get_func_id();
-                            let env = obj::ptr(closure.get_env());
-                            evaluator.push_stack(args.get_value());
+                            let env = closure.get_env();
+                            evaluator.push_stack(args);
                             evaluator.current_func_id = func_id as usize;
                             evaluator.current_ip = 0;
                             evaluator.current_env = env;
@@ -638,7 +629,7 @@ impl<'a> Evaluator<'a> {
                     }
                 }
                 OpCode::Closure(func_id) => {
-                    let closure = obj::alloc_closure(func_id as FuncId, evaluator.current_env.get_value())?;
+                    let closure = obj::alloc_closure(func_id as FuncId, evaluator.current_env.clone())?;
                     evaluator.push_stack(closure)
                 },
                 OpCode::Ret => {
@@ -680,15 +671,15 @@ mod tests {
     use crate::obj;
     use anyhow::Result;
 
-    fn assert_evaluated_to(env: &mut Environment, expr: &Ptr, expected: &Ptr) -> Result<()> {
-        let func_id = env.emit(&expr.get_value()).unwrap();
+    fn assert_evaluated_to(env: &mut Environment, expr: &OpaqueValue, expected: &OpaqueValue) -> Result<()> {
+        let func_id = env.emit(&expr).unwrap();
         let result = Evaluator::eval(env, func_id)?;
         assert!(
-            obj::equal(&result, &expected.get_value()),
+            obj::equal(&result, &expected),
             "{} evaluated to {} expected {}",
-            obj::write_to_string(&expr.get_value()),
+            obj::write_to_string(&expr),
             obj::write_to_string(&result),
-            obj::write_to_string(&expected.get_value()),
+            obj::write_to_string(&expected),
         );
         Ok(())
     }
@@ -701,15 +692,13 @@ mod tests {
         let mut env = Environment::new();
         let parsed = parser::parse(&tests,).unwrap();
         obj::set_force_gc_every_alloc(true);
-        let mut current = obj::ptr(parsed);
-        while let Obj::Cons(cons) = current.get_value().get_obj() {
-            current = obj::ptr(cons.get_cdr());
-            let pair = obj::ptr(cons.get_car());
-            let expr = obj::ptr(obj::list_nth(&pair.get_value(), 0).unwrap());
+        for pair in list_iterator(parsed) {
+            let pair = pair.unwrap();
+            let expr = obj::list_nth(&pair, 0).unwrap();
             // eprintln!("evaluating {}", obj::write_to_string(&expr.get_value()));
-            let expected = obj::ptr(obj::list_nth(&pair.get_value(), 1).unwrap());
+            let expected = obj::list_nth(&pair, 1).unwrap();
             assert_evaluated_to(&mut env, &expr, &expected).map_err(|err|
-                anyhow!("error evaluating {}:{}", obj::write_to_string(&expr.get_value()), err)
+                anyhow!("error evaluating {}:{}", obj::write_to_string(&expr), err)
             ).unwrap();
         }
         obj::set_force_gc_every_alloc(false);
