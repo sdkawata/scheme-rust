@@ -2,7 +2,7 @@ mod obj;
 mod parser;
 mod eval;
 
-use std::env;
+use std::{env};
 use anyhow::Result;
 
 

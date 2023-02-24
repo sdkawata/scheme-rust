@@ -10,7 +10,8 @@ peg::parser!{
             = "#t" {Ok(pool.get_true())}
         rule false_value(pool: &mut ObjPool) -> Result<OpaqueValue>
             = "#f" {Ok(pool.get_false())}
-        rule _ -> () = [' ' | '\r' | '\n']* {()}
+        rule comment() -> () = ";" (!"\n" [_])* ['\n'] {()}
+        rule _ -> () = ([' ' | '\r' | '\n'] / comment())* {()}
         rule list(pool: &mut ObjPool)  -> Result<OpaqueValue> 
             = "(" _ l:(value(pool) ** _) _ ")" {
                 let mut reversed = VecDeque::<OpaqueValue>::new();
@@ -24,7 +25,7 @@ peg::parser!{
                 Ok(res)
             }
         rule symbol(pool: &mut ObjPool) -> Result<OpaqueValue>
-            = s:$(['a'..='z' | '+' | '=' | '?']+) {Ok(pool.get_symbol(s)?)}
+            = s:$(['a'..='z' | '+' | '=' | '?' | '-' | '_']+) {Ok(pool.get_symbol(s)?)}
         rule quoted(pool: &mut ObjPool) -> Result<OpaqueValue> 
             = "'" _ v:value(pool) {
                 let quote_symbol_idx = pool.get_symbol_idx("quote");
@@ -86,6 +87,15 @@ mod tests {
         let mut obj = ObjPool::new(100);
         let value = parse(" 42 ", &mut obj).unwrap();
         if let Obj::I32(42) = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
+    }
+    #[test]
+    fn parse_nil_with_comment() {
+        let mut obj = ObjPool::new(100);
+        let value = parse(" (; this is comment \n ) ", &mut obj).unwrap();
+        if let Obj::Nil = value.get_obj() {
         } else {
             panic!("unexpected")
         }

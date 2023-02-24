@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::alloc::{GlobalAlloc, System, Layout};
-use std::fmt::Write;
+use std::io::Write;
 use std::ptr::NonNull;
 use anyhow::{Result, anyhow};
 use std::mem::size_of;
@@ -168,28 +168,6 @@ pub enum Obj {
     Forwarded(OpaqueValueForwarded),
 }
 
-pub struct ObjPool {
-    layout: Layout,
-    alloced: *mut u8,
-    current: *mut u8,
-    from_space: *mut u8,
-    to_space: *mut u8,
-    pool_size: usize,
-    symbols: Vec<String>,
-    symbols_map: HashMap<String, SymbolId>,
-    head_entry: NonNull<PtrNode>,
-    tail_entry: NonNull<PtrNode>,
-    pub disable_gc: bool,
-    pub force_gc_every_alloc: bool,
-}
-
-
-impl Drop for ObjPool {
-    fn drop(&mut self) {
-        unsafe {System.dealloc(self.alloced, self.layout)}
-    }
-}
-
 struct PtrNode {
     next: Option<NonNull<PtrNode>>,
     prev: Option<NonNull<PtrNode>>,
@@ -220,7 +198,39 @@ impl Ptr {
 
 impl Drop for Ptr {
     fn drop(&mut self) {
-        // TODO
+        unsafe {
+            let prev = (*self.0.as_ptr()).prev;
+            let next = (*self.0.as_ptr()).next;
+            if let Some(prev_node_ptr) = prev {
+                (*prev_node_ptr.as_ptr()).next = next;
+            }
+            if let Some(next_node_ptr) = next {
+                (*next_node_ptr.as_ptr()).prev = prev;
+            }
+            let _ = Box::from_raw(self.0.as_ptr()); // free ptr
+        }
+    }
+}
+
+pub struct ObjPool {
+    layout: Layout,
+    alloced: *mut u8,
+    current: *mut u8,
+    from_space: *mut u8,
+    to_space: *mut u8,
+    pool_size: usize,
+    symbols: Vec<String>,
+    symbols_map: HashMap<String, SymbolId>,
+    head_entry: NonNull<PtrNode>,
+    tail_entry: NonNull<PtrNode>,
+    pub disable_gc: bool,
+    pub force_gc_every_alloc: bool,
+}
+
+
+impl Drop for ObjPool {
+    fn drop(&mut self) {
+        unsafe {System.dealloc(self.alloced, self.layout)}
     }
 }
 
@@ -306,7 +316,7 @@ impl ObjPool {
         }
     }
     unsafe fn start_gc(&mut self) {
-        // eprintln!("start_gc");
+        //eprintln!("start_gc");
         std::mem::swap(&mut self.to_space, &mut self.from_space);
         self.current = self.from_space;
         //eprintln!("start_gc from_space:{:?} to_space:{:?}", self.from_space, self.to_space);
@@ -332,7 +342,7 @@ impl ObjPool {
             }
             scan_ptr = scan_ptr.add(current_value.obj_size())
         }
-        // eprintln!("end_gc");
+        //eprintln!("end_gc current_size:{}", self.current as usize - self.from_space as usize);
     }
     pub fn get_i32(&self, i: i32) -> OpaqueValue {
         OpaqueValue::from_value(i as u32, ValueType::I32)
@@ -394,9 +404,9 @@ impl ObjPool {
         Ok(OpaqueValue::from_objhead_ptr(ptr))
     }
     pub fn write_to_string(&self, v: &OpaqueValue) -> String {
-        let mut buf = String::new();
+        let mut buf = Vec::<u8>::new();
         self.write(&mut buf, v).unwrap();
-        buf
+        String::from_utf8(buf).unwrap()
     }
     pub fn write<W:Write>(&self, w: &mut W, v: &OpaqueValue) -> Result<()> {
         match v.get_obj() {
