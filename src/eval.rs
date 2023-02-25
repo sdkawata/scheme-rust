@@ -91,7 +91,7 @@ impl Environment {
         }
     }
     fn emit_rec(&mut self, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, tail: bool) -> Result<()> {
-        // eprintln!("v:{} tail:{}", self.pool.write_to_string(v), tail);
+        // eprintln!("emit_rec v:{} tail:{}", obj::write_to_string(v), tail);
         match v.to_owned().get_obj() {
             Obj::I32(i) => {
                 opcodes.push(OpCode::PushI32(i));
@@ -139,7 +139,7 @@ impl Environment {
                         opcodes.push(OpCode::PopAndSetFrame);
                         // TODO: body have multiple expr
                         let body = list_nth(v, 2).unwrap();
-                        self.emit_rec(opcodes, &body, true)?;
+                        self.emit_rec(opcodes, &body, tail)?;
                         if !tail {
                             opcodes.push(OpCode::SetFramePrevious);
                         }
@@ -165,7 +165,7 @@ impl Environment {
                         }
                         // TODO: body have multiple expr
                         let body = list_nth(v, 2).unwrap();
-                        self.emit_rec(opcodes, &body, true)?;
+                        self.emit_rec(opcodes, &body, tail)?;
                         if !tail {
                             opcodes.push(OpCode::SetFramePrevious);
                         }
@@ -210,13 +210,13 @@ impl Environment {
                         self.emit_rec(opcodes, &cond, false)?;
                         let jmp_if_false_addr = opcodes.len();
                         opcodes.push(OpCode::Invalid);
-                        self.emit_rec(opcodes, &true_branch, true)?;
+                        self.emit_rec(opcodes, &true_branch, tail)?;
                         let jmp_addr = opcodes.len();
                         if !tail {
                             opcodes.push(OpCode::Invalid);
                         }
                         opcodes[jmp_if_false_addr] = OpCode::JmpIfFalse(opcodes.len());
-                        self.emit_rec(opcodes, &false_branch, true)?;
+                        self.emit_rec(opcodes, &false_branch, tail)?;
                         if !tail {
                             opcodes[jmp_addr] = OpCode::Jmp(opcodes.len());
                         }

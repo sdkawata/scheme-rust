@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use std::mem::size_of;
 
 #[repr(C)]
-#[derive(Clone,Copy, Debug)]
+#[derive(Clone,Copy, Debug, PartialEq, Eq)]
 enum ObjType {
     Cons,
     Closure,
@@ -439,7 +439,10 @@ pub fn get_native(i: NativeId) -> OpaqueValue {
     RawValue::from_value(i as u32, ValueType::Native).into()
 }
 pub fn get_nil() -> OpaqueValue {
-    RawValue::from_value(0, ValueType::Nil).into()
+    get_raw_nil().into()
+}
+fn get_raw_nil() -> RawValue {
+    RawValue::from_value(0, ValueType::Nil)
 }
 pub fn get_true() -> OpaqueValue {
     RawValue::from_value(0, ValueType::True).into()
@@ -546,7 +549,6 @@ pub fn set_disable_gc(disable_gc: bool) {
 pub fn set_force_gc_every_alloc(force_gc_every_alloc: bool) {
     OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().force_gc_every_alloc = force_gc_every_alloc )
 }
-
 
 pub fn equal(v1: &OpaqueValue, v2: &OpaqueValue) -> bool {
     match (v1.to_owned().get_obj(), v2.to_owned().get_obj()) {
