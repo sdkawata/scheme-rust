@@ -273,7 +273,7 @@ fn native_plus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue
 }
 
 fn native_minus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
-    if list_length(&v).ok_or(anyhow!("= error: args not list"))? < 2 {
+    if list_length(&v).ok_or_else(||anyhow!("= error: args not list"))? < 2 {
         return Err(anyhow!("= error: length < 2"))
     }
     let head = list_nth(&v, 0).unwrap();
@@ -293,7 +293,7 @@ fn native_minus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValu
 }
 
 fn native_eq(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
-    if list_length(&v).ok_or(anyhow!("= error: args not list"))? < 2 {
+    if list_length(&v).ok_or_else(|| anyhow!("= error: args not list"))? < 2 {
         return Err(anyhow!("= error: length < 2"))
     }
     let head_obj = list_nth(&v, 0).unwrap().get_obj();
@@ -420,10 +420,10 @@ impl<'a> Evaluator<'a> {
         self.stack.push(v)
     }
     fn peek_stack(&mut self) -> Result<OpaqueValue> {
-        Ok(self.stack.last().ok_or(anyhow!("eval error:trying to peek from empty stack"))?.clone())
+        Ok(self.stack.last().ok_or_else(|| anyhow!("eval error:trying to peek from empty stack"))?.clone())
     }
     fn pop_stack(&mut self) -> Result<OpaqueValue> {
-        self.stack.pop().ok_or(anyhow!("eval error:trying to pop from empty stack"))
+        self.stack.pop().ok_or_else(|| anyhow!("eval error:trying to pop from empty stack"))
     }
     fn shrink_stack(&mut self, target_len:usize) {
         if target_len > self.stack.len() {
@@ -481,7 +481,7 @@ impl<'a> Evaluator<'a> {
                 },
                 OpCode::LookUp(s) => {
                     // eprintln!("{}", obj::write_to_string(&evaluator.current_env));
-                    let value = evaluator.lookup(s).ok_or(anyhow!("undefined symbol: {}", obj::get_symbol_str(s)))?;
+                    let value = evaluator.lookup(s).ok_or_else(|| anyhow!("undefined symbol: {}", obj::get_symbol_str(s)))?;
                     evaluator.push_stack(value)
                 },
                 OpCode::AddNewVar(s) => {
