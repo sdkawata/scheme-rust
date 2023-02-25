@@ -36,7 +36,7 @@ struct Func {
 pub struct Environment {
     funcs: Vec<Func>,
     consts: Vec<OpaqueValue>,
-    writer: Box<dyn Write>,
+    pub writer: Box<dyn Write>,
 }
 
 fn bind_pair_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<(SymbolId, OpaqueValue)>> {
