@@ -83,7 +83,7 @@ pub fn set_var(frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
 }
 pub fn previous_frame(frame: OpaqueValue) -> Result<OpaqueValue> {
     if let Obj::Cons(cons) = frame.get_obj() {
-        Ok(cons.get_car())
+        Ok(cons.get_cdr())
     } else {
         panic!("unexpected environment format: not cons")
     }
