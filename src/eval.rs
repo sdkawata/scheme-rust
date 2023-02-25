@@ -379,72 +379,24 @@ pub struct Evaluator<'a> {
 
 impl<'a> Evaluator<'a> {
     fn lookup(&self, s:SymbolId) -> Option<OpaqueValue> {
-        for frame in list_iterator(self.current_env.clone()) {
-            let frame = frame.unwrap();
-            for pair in list_iterator(frame) {
-                if let Obj::Cons(cons) = pair.unwrap().get_obj() {
-                    if let Obj::Symbol(symbol_id) = cons.get_car().get_obj() {
-                        if symbol_id == s {
-                            return Some(cons.get_cdr())
-                        }
-                    } else {
-                        panic!("internal error:unexpected environment format:car of pair is not symbol")
-                    }
-                } else {
-                    panic!("internal error: unexpected environment format: frame is not list")
-                }
-            }
-        }
-        None
+        obj::frame::lookup(s, &self.current_env)
     }
     fn add_new_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
-        if let Obj::Cons(cons) = frame.clone().get_obj() {
-            let top_frame = cons.get_car();
-            let new_pair = obj::alloc_cons(obj::get_symbol_from_idx(s), v)?;
-            let new_top_frame = obj::alloc_cons(new_pair, top_frame)?;
-            cons.set_car(new_top_frame);
-            // println!("env: {}", pool.write_to_string(&self.current_env));
-            Ok(())
-        } else {
-            panic!("unexpected environment format: not cons")
-        }
+        obj::frame::add_new_var(frame,s,v)
     }
     fn set_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
-        for frame in list_iterator(frame.clone()) {
-            let frame = frame.unwrap();
-            for pair in list_iterator(frame) {
-                if let Obj::Cons(cons) = pair.unwrap().get_obj() {
-                    if let Obj::Symbol(symbol_id) = cons.get_car().get_obj() {
-                        if symbol_id == s {
-                            cons.set_cdr(v);
-                            return Ok(())
-                        }
-                    } else {
-                        panic!("internal error:unexpected environment format:car of pair is not symbol")
-                    }
-                } else {
-                    panic!("internal error: unexpected environment format: frame is not list")
-                }
-            }
-        }
-        Err(anyhow!("cannot set var: not found"))
+        obj::frame::set_var(frame,s,v)
     }
-    fn set_frame_previous(&mut self) {
-        if let Obj::Cons(cons) = self.current_env.clone().get_obj() {
-            let prev_frame = cons.get_car();
-            self.current_env = prev_frame
-        } else {
-            panic!("unexpected environment format: not cons")
-        }
+    fn set_frame_previous(&mut self) -> Result<()> {
+        self.current_env = obj::frame::previous_frame(self.current_env.clone())?;
+        Ok(())
     }
     fn set_new_frame(&mut self) -> Result<()> {
-        let new_frame = self.create_new_frame()?;
-        self.current_env = new_frame;
+        self.current_env = obj::frame::extend_frame(&self.current_env)?;
         Ok(())
     }
     fn create_new_frame(&mut self) -> Result<OpaqueValue>{
-        let new_frame = obj::get_nil();
-        obj::alloc_cons(new_frame, self.current_env.clone())
+        obj::frame::extend_frame(&self.current_env)
     }
     fn register_native_func(&mut self, name: &str, func: NativeFunc) -> Result<()> {
         let symbol_id = obj::get_symbol_idx(name);

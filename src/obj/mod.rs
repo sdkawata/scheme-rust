@@ -6,6 +6,8 @@ use std::ptr::NonNull;
 use anyhow::{Result, anyhow};
 use std::mem::size_of;
 
+pub mod frame;
+
 #[repr(C)]
 #[derive(Clone,Copy, Debug, PartialEq, Eq)]
 enum ObjType {
@@ -15,9 +17,9 @@ enum ObjType {
 }
 
 #[repr(C)]
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone,Copy,Debug,PartialEq, Eq)]
 enum ValueType {
-    Nil,
+    Nil = 0,
     I32,
     True,
     False,
@@ -76,6 +78,9 @@ impl RawValue {
     fn is_value(&self) -> bool {
         self.value %2 == 1
     }
+    fn is_nil(&self) -> bool {
+        self.value == 1
+    }
     unsafe fn obj_type(&self) -> ObjType {
         debug_assert!(!self.is_value());
         let ptr: *mut ObjHead = self.as_ptr();
@@ -111,16 +116,13 @@ impl RawValue {
 
 impl From<Ptr> for RawValue {
     fn from(item: Ptr) -> RawValue {
-       unsafe {(*item.0.as_ptr()).value}
+       item.get_raw_value()
     }
 }
 
 impl From<OpaqueValue> for RawValue {
     fn from(item: OpaqueValue) -> RawValue {
-        match item.0 {
-            ValueOrPtr::Value(value) => value,
-            ValueOrPtr::Ptr(ptr) => ptr.into(),
-        }
+        item.as_raw_value()
     } 
 }
 
@@ -156,6 +158,12 @@ impl OpaqueValue {
                     ObjType::Forwarded => Obj::Forwarded(OpaqueValueForwarded(ptr)),
                 }
             }
+        }
+    }
+    fn as_raw_value(&self) -> RawValue {
+        match &self.0 {
+            ValueOrPtr::Value(value) => *value,
+            ValueOrPtr::Ptr(ptr) => ptr.get_raw_value(),
         }
     }
 }
