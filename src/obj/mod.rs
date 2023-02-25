@@ -16,7 +16,7 @@ enum ObjType {
     Forwarded,
 }
 
-#[repr(C)]
+#[repr(u32)]
 #[derive(Clone,Copy,Debug,PartialEq, Eq)]
 enum ValueType {
     Nil = 0,
@@ -72,15 +72,19 @@ impl RawValue {
     fn from_value(value: u32, value_type: ValueType) -> Self {
         RawValue{value: ((value as u64) << 32) + ((value_type as u64) << 1) + 1}
     }
+    #[inline]
     unsafe fn as_ptr<T>(&self) -> *mut T {
         std::mem::transmute(self.value)
     }
+    #[inline]
     fn is_value(&self) -> bool {
         self.value %2 == 1
     }
+    #[inline]
     fn is_nil(&self) -> bool {
         self.value == 1
     }
+    #[inline]
     unsafe fn obj_type(&self) -> ObjType {
         debug_assert!(!self.is_value());
         let ptr: *mut ObjHead = self.as_ptr();
@@ -94,23 +98,19 @@ impl RawValue {
             ObjType::Forwarded => size_of::<ObjForwarded>(),
         }
     }
+    #[inline]
     unsafe fn value(&self) -> u32 {
         debug_assert!(self.is_value());
         (self.value >> 32) as u32
     }
-    unsafe fn value_type(&self) -> ValueType {
+    #[inline]
+    unsafe fn value_type_u32(&self) -> u32 {
         debug_assert!(self.is_value());
-        let value_type = ((self.value & 0xffff) >> 1) as u64;
-        match value_type {
-            v if v == ValueType::Nil as u64 => ValueType::Nil,
-            v if v == ValueType::I32 as u64 => ValueType::I32,
-            v if v == ValueType::True as u64 => ValueType::True,
-            v if v == ValueType::False as u64 => ValueType::False,
-            v if v == ValueType::Undef as u64 => ValueType::Undef,
-            v if v == ValueType::Symbol as u64 => ValueType::Symbol,
-            v if v == ValueType::Native as u64 => ValueType::Native,
-            _ => panic!("unexpected value type {}", value_type),
-        }
+        ((self.value & 0xffff) >> 1) as u32
+    }
+    #[inline]
+    unsafe fn value_type(&self) -> ValueType {
+        std::mem::transmute(self.value_type_u32())
     }
 }
 

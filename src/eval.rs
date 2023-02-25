@@ -502,7 +502,7 @@ impl<'a> Evaluator<'a> {
                     evaluator.current_env = frame;
                 }
                 OpCode::SetFramePrevious => {
-                    evaluator.set_frame_previous();
+                    evaluator.set_frame_previous()?;
                 },
                 OpCode::PushNewFrame => {
                     let new_frame = evaluator.create_new_frame()?;

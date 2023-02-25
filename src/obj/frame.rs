@@ -60,6 +60,7 @@ pub fn add_new_var(frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()
         panic!("unexpected environment format: not cons")
     }
 }
+
 pub fn set_var(frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
     for frame in list_iterator(frame.clone()) {
         let frame = frame.unwrap();
