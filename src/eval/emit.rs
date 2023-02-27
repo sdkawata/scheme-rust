@@ -19,10 +19,21 @@ fn bind_pair_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<(SymbolId, Op
 }
 
 pub fn emit(env:&mut Environment, v: &OpaqueValue) -> Result<usize> {
-    let opcodes = Vec::new();
-    emit_func(env, opcodes, v)
+    emit_func(env, &obj::get_nil(), v)
 }
-fn emit_func(env:&mut Environment, mut opcodes: Vec<OpCode>, v: &OpaqueValue) -> Result<usize> {
+fn emit_func(env:&mut Environment, args: &OpaqueValue, v: &OpaqueValue) -> Result<usize> {
+    if list_length(args) == None {
+        return Err(anyhow!("emit error: args is not list"))
+    }
+    let mut opcodes = Vec::<OpCode>::new();
+    for v in list_iterator(args.to_owned()) {
+        if let Obj::Symbol(s) = v.unwrap().get_obj() {
+            opcodes.push(OpCode::CarCdr);
+            opcodes.push(OpCode::AddNewVarCurrent(s));
+        } else {
+            return Err(anyhow!("emit error: args is not symbol"))
+        }
+    }
     emit_rec(env, &mut opcodes, v, true)?;
     let idx = env.funcs.len();
     // eprintln!("{:?}", &opcodes);
@@ -92,15 +103,23 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     if length < 3 {
                         Err(anyhow!("malformed define: length < 3"))?;
                     }
-                    let defined = if let Obj::Symbol(s) = list_nth(v, 1).unwrap().get_obj() {
-                        s
+                    if let Obj::Symbol(s) = list_nth(v, 1).unwrap().get_obj() {
+                        let symbol_id = s;
+                        let body = list_nth(v, 2).unwrap();
+                        emit_rec(env, opcodes, &body, false)?;
+                        opcodes.push(OpCode::AddNewVarCurrent(symbol_id));
+                    } else if let Obj::Cons(cons) = list_nth(v, 1).unwrap().get_obj() {
+                        if let Obj::Symbol(symbol_id) = cons.get_car().get_obj() {
+                            let body = list_nth(v, 2).unwrap();
+                            let func_id = emit_func(env, &cons.get_cdr(), &body)?;
+                            opcodes.push(OpCode::Closure(func_id as FuncId));
+                            opcodes.push(OpCode::AddNewVarCurrent(symbol_id));
+                        } else {  
+                            return Err(anyhow!("malformed define: not symbol"))
+                        }
                     } else {
                         return Err(anyhow!("malformed define: not symbol"))
                     };
-                    // TODO: body have multiple expr
-                    let body = list_nth(v, 2).unwrap();
-                    emit_rec(env, opcodes, &body, false)?;
-                    opcodes.push(OpCode::AddNewVarCurrent(defined));
                     opcodes.push(OpCode::PushUndef);
                     if tail {
                         opcodes.push(OpCode::Ret);
@@ -161,24 +180,10 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     let args = list_nth(v, 1).unwrap();
                     let body = list_nth(v, 2).unwrap();
-                    if list_length(&args) == None {
-                        return Err(anyhow!("emit error: args is not list"))
-                    }
-                    let func_id = {
-                        let mut opcodes = Vec::<OpCode>::new();
-                        for v in list_iterator(args) {
-                            if let Obj::Symbol(s) = v.unwrap().get_obj() {
-                                opcodes.push(OpCode::CarCdr);
-                                opcodes.push(OpCode::AddNewVarCurrent(s));
-                            } else {
-                                return Err(anyhow!("emit error: args is not symbol"))
-                            }
-                        }
-                        emit_func(env, opcodes, &body)
-                    }?;
+                    let func_id = emit_func(env, &args, &body)?;
                     opcodes.push(OpCode::Closure(func_id as FuncId));
                     if tail {
-                        opcodes.push(OpCode::Ret);
+                        opcodes.push(OpCode::Ret)
                     }
                     return Ok(())
                 },

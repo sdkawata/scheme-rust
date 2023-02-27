@@ -55,6 +55,7 @@ impl Environment {
     }
     fn register_native_funcs(&mut self) -> Result<()> {
         self.register_native_func("+", native_plus)?;
+        self.register_native_func("*", native_times)?;
         self.register_native_func("-", native_minus)?;
         self.register_native_func("=", native_eq)?;
         self.register_native_func("car", native_car)?;
@@ -91,6 +92,21 @@ fn native_plus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue
             }
         } else {
             return Err(anyhow!("+ error: non-list given"))
+        }
+    }
+    Ok(result)
+}
+
+fn native_times(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    let mut result = obj::get_i32(1);
+    for n in list_iterator(v) {
+        if let Ok(num_value) = n {
+            match (result.get_obj(), num_value.get_obj()) {
+                (Obj::I32(i), Obj::I32(j)) => {result = obj::get_i32(i*j)}
+                _ => {return Err(anyhow!("* error:non-number given"))}
+            }
+        } else {
+            return Err(anyhow!("* error: non-list given"))
         }
     }
     Ok(result)
