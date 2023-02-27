@@ -1,5 +1,5 @@
 ; create many object to test gc
-(write
+(display
     (let ((loop 
         (letrec ((loop_rec 
             (lambda (i acc) (if (= i 0) acc (loop_rec (- i 1) (+ acc (car (cons 1 '()))))))))

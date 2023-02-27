@@ -2,6 +2,7 @@
     (42 42)
     (#t #t)
     (#f #f)
+    (#\space #\space)
     ((let ((x 1)) x) 1)
     ((let ((x 1)) (let ((x 2)) x)) 2)
     ((let ((x 1)) (let ((x 2) (y x)) y)) 1)

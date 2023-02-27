@@ -1,4 +1,4 @@
-(write
+(display
     (let
             (
                 (sum

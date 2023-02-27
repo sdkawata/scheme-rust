@@ -9,6 +9,7 @@ pub use emit::emit;
 #[derive(Debug)]
 enum OpCode {
     PushI32(i32), // stack: -> I32,
+    PushChar(char), // stack: -> char,
     PushTrue, // stack -> true
     PushFalse, // stack -> false
     PushUndef, // stack -> undef
@@ -60,6 +61,8 @@ impl Environment {
         self.register_native_func("cdr", native_cdr)?;
         self.register_native_func("cons", native_cons)?;
         self.register_native_func("null?", native_null_p)?;
+        self.register_native_func("write", native_write)?;
+        self.register_native_func("display", native_display)?;
         self.register_native_func("write", native_write)?;
         Ok(())
     }
@@ -181,6 +184,14 @@ fn native_write(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue
     obj::write(&mut evaluator.env.writer, &v)?;
     Ok(obj::get_undef())
 }
+fn native_display(evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    if list_length(&v) != Some(1) {
+        return Err(anyhow!("write error: args length != 1"))
+    }
+    let v = list_nth(&v, 0).unwrap();
+    obj::display(&mut evaluator.env.writer, &v)?;
+    Ok(obj::get_undef())
+}
 
 struct CallStack {
     ret_func_id: usize,
@@ -259,6 +270,9 @@ impl<'a> Evaluator<'a> {
             match evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip] {
                 OpCode::PushI32(i) => {
                     evaluator.push_stack(obj::get_i32(i))
+                },
+                OpCode::PushChar(c) => {
+                    evaluator.push_stack(obj::get_char(c))
                 },
                 OpCode::PushConst(const_idx) => {
                     evaluator.push_stack(evaluator.env.consts[const_idx].clone());

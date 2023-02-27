@@ -1,7 +1,21 @@
 use std::collections::VecDeque;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use crate::obj;
 use crate::obj::{OpaqueValue};
+
+const CHAR_MAP : & [(&str, char)] = &[
+    ("space", ' '),
+    ("newline", '\n'),
+];
+
+pub fn parse_char(s: &str) -> Result<char> {
+    for (str, c) in CHAR_MAP {
+        if s == *str {
+            return Ok(*c)
+        }
+    }
+    Err(anyhow!("char parse failed"))
+}
 
 peg::parser!{
     grammar scheme_parser() for str {
@@ -13,6 +27,17 @@ peg::parser!{
             = "#f" {Ok(obj::get_false())}
         rule comment() -> () = ";" (!"\n" [_])* ['\n'] {()}
         rule _ -> () = ([' ' | '\r' | '\n'] / comment())* {()}
+        rule char_by_single_char() -> Result<OpaqueValue> = "#\\" c:([_]) {
+            Ok(obj::get_char(c))
+        }
+        rule char_by_multiple_char() -> Result<OpaqueValue> = "#\\" s:(['a'..='z' | 'A'..='Z' | '0'..='9']+) {
+            if s.len() == 1 {
+                Ok(obj::get_char(s[0]))
+            } else {
+                Ok(obj::get_char(super::parse_char(&s.iter().collect::<String>())?))
+            }
+        }
+        rule char() -> Result<OpaqueValue> = c:(char_by_multiple_char() / char_by_single_char()) {c}
         rule list()  -> Result<OpaqueValue> 
             = "(" _ l:(value() ** _) _ ")" {
                 let mut reversed = VecDeque::<OpaqueValue>::new();
@@ -39,7 +64,7 @@ peg::parser!{
                 )
             }
         rule value() -> Result<OpaqueValue>
-            = n:(number() / list() / symbol() / true_value() / false_value() / quoted()) {n}
+            = n:(number() / list() / symbol() / true_value() / false_value() / char() / quoted()) {n}
         pub rule values() -> Result<Vec<OpaqueValue>> 
             = _ l:(value() ** _) _ {l.into_iter().collect()}
         pub rule top() -> Result<OpaqueValue>
@@ -80,10 +105,38 @@ mod tests {
         } else {
             panic!("unexpected")
         }
-    }#[test]
+    }
+    #[test]
     fn parse_false() {
         let value = parse("#f").unwrap();
         if let Obj::False = value.get_obj() {
+        } else {
+            panic!("unexpected")
+        }
+    }
+    #[test]
+    fn parse_char() {
+        let value = parse("#\\a").unwrap();
+        if let Obj::Char(c) = value.get_obj() {
+            assert_eq!('a', c)
+        } else {
+            panic!("unexpected")
+        }
+    }
+    #[test]
+    fn parse_char_unicode() {
+        let value = parse("#\\あ").unwrap();
+        if let Obj::Char(c) = value.get_obj() {
+            assert_eq!('あ', c)
+        } else {
+            panic!("unexpected")
+        }
+    }
+    #[test]
+    fn parse_char_name() {
+        let value = parse("#\\space").unwrap();
+        if let Obj::Char(c) = value.get_obj() {
+            assert_eq!(' ', c)
         } else {
             panic!("unexpected")
         }

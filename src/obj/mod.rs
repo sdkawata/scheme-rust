@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::char::from_u32_unchecked;
 use std::collections::HashMap;
 use std::alloc::{GlobalAlloc, System, Layout};
 use std::io::Write;
@@ -26,6 +27,7 @@ enum ValueType {
     Undef,
     Symbol,
     Native,
+    Char,
 }
 
 type Value = u64;
@@ -149,6 +151,7 @@ impl OpaqueValue {
                     ValueType::True => Obj::True,
                     ValueType::False => Obj::False,
                     ValueType::Undef => Obj::Undef,
+                    ValueType::Char => Obj::Char(unsafe{ from_u32_unchecked(value) }),
                 }
             },
             ValueOrPtr::Ptr(ptr) => {
@@ -226,6 +229,7 @@ pub enum Obj {
     False,
     Undef,
     I32(i32),
+    Char(char),
     Native(NativeId),
     Symbol(SymbolId),
     Cons(OpaqueValueCons),
@@ -443,6 +447,9 @@ impl ObjPool {
 pub fn get_i32(i: i32) -> OpaqueValue {
     RawValue::from_value(i as u32, ValueType::I32).into()
 }
+pub fn get_char(c: char) -> OpaqueValue {
+    RawValue::from_value(c as u32, ValueType::Char).into()
+}
 pub fn get_native(i: NativeId) -> OpaqueValue {
     RawValue::from_value(i as u32, ValueType::Native).into()
 }
@@ -499,27 +506,48 @@ pub fn get_symbol_from_idx(idx: SymbolId) -> OpaqueValue {
 pub fn get_symbol_idx(str: &str) -> SymbolId {
     OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_idx(str))
 }
+
+pub fn display_to_string(v: &OpaqueValue) -> String {
+    display_to_string_internal(v, true)
+}
 pub fn write_to_string(v: &OpaqueValue) -> String {
+    display_to_string_internal(v, false)
+}
+fn display_to_string_internal(v: &OpaqueValue, display: bool) -> String{
     let mut buf = Vec::<u8>::new();
-    write(&mut buf, v).unwrap();
+    display_internal(&mut buf, v, display).unwrap();
     String::from_utf8(buf).unwrap()
 }
+pub fn display<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
+    display_internal(w, v, true)
+}
 pub fn write<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
+    display_internal(w, v, true)
+}
+
+fn display_internal<W:Write>(w: &mut W, v: &OpaqueValue, display: bool) -> Result<()> {
     match v.clone().get_obj() {
         Obj::Nil => {write!(w, "()")?;}
         Obj::True => {write!(w, "#t")?;}
         Obj::False => {write!(w, "#f")?;}
         Obj::Undef => {write!(w, "#undef")?;}
         Obj::I32(i) => {write!(w, "{}",i)?;}
+        Obj::Char(c) => {
+            if display {
+                write!(w, "{}", c)?;
+            } else {
+                write!(w, "#\\{}", c)?;
+            }
+        }
         Obj::Native(i) => {write!(w, "#native:{}#", i)?;}
         Obj::Symbol(s) => {write!(w, "{}", OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_str(s)))?;}
-        Obj::Cons(_) => {write_list(w, v)?;}
+        Obj::Cons(_) => {display_list(w, v)?;}
         Obj::Closure(_) => {write!(w, "#closure#")?;}
         Obj::Forwarded(_) => {write!(w, "#forwarded#")?;}
     }
     Ok(())
 }
-fn write_list<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
+fn display_list<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
     write!(w, "(")?;
     let mut current: OpaqueValue = v.to_owned();
     let mut first = true;
@@ -530,13 +558,13 @@ fn write_list<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
                     write!(w, " ")?;
                 }
                 first = false;
-                write(w, &cons.get_car())?;
+                display(w, &cons.get_car())?;
                 current = cons.get_cdr();
             },
             Obj::Nil => {break}
             _ => {
                 write!(w, ". ")?;
-                write(w, &current)?;
+                display(w, &current)?;
                 break
             }
         }
@@ -544,6 +572,7 @@ fn write_list<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
     write!(w, ")")?;
     Ok(())
 }
+
 pub fn get_symbol(str: &str) -> Result<OpaqueValue> {
     OBJ_POOL.with(|obj_pool| {
         let idx = obj_pool.borrow_mut().get_symbol_idx(str);
@@ -564,6 +593,7 @@ pub fn equal(v1: &OpaqueValue, v2: &OpaqueValue) -> bool {
         (Obj::False, Obj::False) => true,
         (Obj::Undef, Obj::Undef) => true,
         (Obj::I32(i1), Obj::I32(i2)) => i1 == i2,
+        (Obj::Char(c1), Obj::Char(c2)) => c1 == c2,
         (Obj::Nil, Obj::Nil) => true,
         (Obj::Symbol(s1), Obj::Symbol(s2)) => s1 == s2,
         (Obj::Cons(c1), Obj::Cons(c2)) => equal(&c1.get_car(), &c2.get_car()) && equal(&c1.get_car(), &c2.get_car()),
