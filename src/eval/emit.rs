@@ -80,6 +80,26 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
         Obj::Cons(cons) => {
             let car = cons.get_car();
             match car.get_obj() {
+                Obj::Symbol(s) if obj::get_symbol_str(s) == "define" => {
+                    let length = list_length(v).ok_or(anyhow!("malformed define: not list"))?;
+                    if length < 3 {
+                        Err(anyhow!("malformed define: length < 3"))?;
+                    }
+                    let defined = if let Obj::Symbol(s) = list_nth(v, 1).unwrap().get_obj() {
+                        s
+                    } else {
+                        return Err(anyhow!("malformed define: not symbol"))
+                    };
+                    // TODO: body have multiple expr
+                    let body = list_nth(v, 2).unwrap();
+                    emit_rec(env, opcodes, &body, false)?;
+                    opcodes.push(OpCode::AddNewVarCurrent(defined));
+                    opcodes.push(OpCode::PushUndef);
+                    if tail {
+                        opcodes.push(OpCode::Ret);
+                    }
+                    return Ok(())
+                },
                 Obj::Symbol(s) if obj::get_symbol_str(s) == "let" => {
                     let length = list_length(v).ok_or(anyhow!("malformed let: not list"))?;
                     if length < 3 {

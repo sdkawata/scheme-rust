@@ -8,9 +8,11 @@ use anyhow::Result;
 
 fn exec_file(fname: &str, env: &mut eval::Environment) -> Result<()> {
     let content = std::fs::read_to_string(fname)?;
-    let obj = parser::parse(&content)?;
-    let func_id = eval::emit(env, &obj)?;
-    eval::Evaluator::eval(env, func_id)?;
+    let objs = parser::parse_values(&content)?;
+    for obj in objs {
+        let func_id = eval::emit(env, &obj)?;
+        eval::Evaluator::eval(env, func_id)?;
+    }
     Ok(())
 }
 

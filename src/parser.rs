@@ -40,6 +40,8 @@ peg::parser!{
             }
         rule value() -> Result<OpaqueValue>
             = n:(number() / list() / symbol() / true_value() / false_value() / quoted()) {n}
+        pub rule values() -> Result<Vec<OpaqueValue>> 
+            = _ l:(value() ** _) _ {l.into_iter().collect()}
         pub rule top() -> Result<OpaqueValue>
             = _ n:value() _ {n}
     }
@@ -49,6 +51,12 @@ pub fn parse(s: &str) -> Result<OpaqueValue> {
     // Err(anyhow!("a"))
     obj::set_disable_gc(true);
     let ret = scheme_parser::top(s)?;
+    obj::set_disable_gc(false);
+    ret
+}
+pub fn parse_values(s: &str) -> Result<Vec<OpaqueValue>> {
+    obj::set_disable_gc(true);
+    let ret = scheme_parser::values(s)?;
     obj::set_disable_gc(false);
     ret
 }
