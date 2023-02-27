@@ -9,7 +9,7 @@ use anyhow::Result;
 fn exec_file(fname: &str, env: &mut eval::Environment) -> Result<()> {
     let content = std::fs::read_to_string(fname)?;
     let obj = parser::parse(&content)?;
-    let func_id = env.emit(&obj)?;
+    let func_id = eval::emit(env, &obj)?;
     eval::Evaluator::eval(env, func_id)?;
     Ok(())
 }

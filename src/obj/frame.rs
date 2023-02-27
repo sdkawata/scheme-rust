@@ -88,3 +88,9 @@ pub fn previous_frame(frame: OpaqueValue) -> Result<OpaqueValue> {
         panic!("unexpected environment format: not cons")
     }
 }
+pub fn empty_frame() -> Result<OpaqueValue> {
+    alloc_cons(
+        get_nil(),
+        get_nil()
+    )
+}

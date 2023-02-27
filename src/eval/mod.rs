@@ -3,6 +3,9 @@ use crate::obj;
 use crate::obj::{OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId};
 use anyhow::{Result, anyhow};
 
+mod emit;
+pub use emit::emit;
+
 #[derive(Debug)]
 enum OpCode {
     PushI32(i32), // stack: -> I32,
@@ -37,223 +40,41 @@ pub struct Environment {
     funcs: Vec<Func>,
     consts: Vec<OpaqueValue>,
     pub writer: Box<dyn Write>,
-}
-
-fn bind_pair_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<(SymbolId, OpaqueValue)>> {
-    list_iterator(v).map(|bind| {
-        let bind = bind.map_err(|_| anyhow!("bind pair is not list"))?;
-        if list_length(&bind) != Some(2) {
-            Err(anyhow!("bind is not list of length 2"))?;
-        }
-        if let Obj::Symbol(s) = list_nth(&bind, 0).unwrap().get_obj() {
-            let value = list_nth(&bind, 1).unwrap();
-            Ok((s, value))
-        } else {
-            Err(anyhow!("bind key is not symbol"))?
-        }
-    })
+    top_level_env: OpaqueValue,
+    natives: Vec<NativeFunc>,
 }
 
 impl Environment {
+    fn register_native_func(&mut self, name: &str, func: NativeFunc) -> Result<()> {
+        let symbol_id = obj::get_symbol_idx(name);
+        let idx = self.natives.len();
+        self.natives.push(func);
+        let val = obj::get_native(idx as u32);
+        obj::frame::add_new_var(self.top_level_env.clone(), symbol_id, val)
+    }
+    fn register_native_funcs(&mut self) -> Result<()> {
+        self.register_native_func("+", native_plus)?;
+        self.register_native_func("-", native_minus)?;
+        self.register_native_func("=", native_eq)?;
+        self.register_native_func("car", native_car)?;
+        self.register_native_func("cdr", native_cdr)?;
+        self.register_native_func("cons", native_cons)?;
+        self.register_native_func("null?", native_null_p)?;
+        self.register_native_func("write", native_write)?;
+        Ok(())
+    }
     pub fn new() -> Self {
-        Self {
+        let mut new_env = Self {
             funcs: Vec::new(),
             consts: Vec::new(),
             writer: Box::new(stdout()),
-        }
-    }
-    pub fn emit(&mut self, v: &OpaqueValue) -> Result<usize> {
-        let opcodes = Vec::new();
-        self.emit_func(opcodes, v)
-    }
-    fn emit_func(&mut self, mut opcodes: Vec<OpCode>, v: &OpaqueValue) -> Result<usize> {
-        self.emit_rec(&mut opcodes, v, true)?;
-        let idx = self.funcs.len();
-        // eprintln!("{:?}", &opcodes);
-        self.funcs.push(Func{
-            opcodes
-        });
-        Ok(idx)
-    }
-    fn emit_cons(&mut self, opcodes: &mut Vec<OpCode>, v:&OpaqueValue) -> Result<()> {
-        match v.to_owned().get_obj() {
-            Obj::Cons(cons) => {
-                self.emit_rec(opcodes, &cons.get_car(), false)?;
-                self.emit_cons(opcodes, &cons.get_cdr())?;
-                opcodes.push(OpCode::Cons);
-                Ok(())
-            },
-            Obj::Nil => {
-                opcodes.push(OpCode::PushNil);
-                Ok(())
-            }
-            _ => Err(anyhow!("expected list: non-list given"))
-        }
-    }
-    fn emit_rec(&mut self, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, tail: bool) -> Result<()> {
-        // eprintln!("emit_rec v:{} tail:{}", obj::write_to_string(v), tail);
-        match v.to_owned().get_obj() {
-            Obj::I32(i) => {
-                opcodes.push(OpCode::PushI32(i));
-                if tail {
-                    opcodes.push(OpCode::Ret);
-                }
-                Ok(())
-            },
-            Obj::Symbol(s) => {
-                opcodes.push(OpCode::LookUp(s));
-                if tail {
-                    opcodes.push(OpCode::Ret);
-                }
-                Ok(())
-            },
-            Obj::True => {
-                opcodes.push(OpCode::PushTrue);
-                if tail {
-                    opcodes.push(OpCode::Ret);
-                }
-                Ok(())
-            },
-            Obj::False => {
-                opcodes.push(OpCode::PushFalse);
-                if tail {
-                    opcodes.push(OpCode::Ret);
-                }
-                Ok(())
-            },
-            Obj::Cons(cons) => {
-                let car = cons.get_car();
-                match car.get_obj() {
-                    Obj::Symbol(s) if obj::get_symbol_str(s) == "let" => {
-                        let length = list_length(v).ok_or(anyhow!("malformed let: not list"))?;
-                        if length < 3 {
-                            Err(anyhow!("malformed let: length < 3"))?;
-                        }
-                        let binds = list_nth(v, 1).unwrap();
-                        opcodes.push(OpCode::PushNewFrame);
-                        for bind in bind_pair_iterator(binds) {
-                            let (symbol_id, expr) = bind.map_err(|e| anyhow!("malformed let:{}", e))?;
-                            self.emit_rec(opcodes, &expr, false)?;
-                            opcodes.push(OpCode::AddNewVar(symbol_id))
-                        }
-                        opcodes.push(OpCode::PopAndSetFrame);
-                        // TODO: body have multiple expr
-                        let body = list_nth(v, 2).unwrap();
-                        self.emit_rec(opcodes, &body, tail)?;
-                        if !tail {
-                            opcodes.push(OpCode::SetFramePrevious);
-                        }
-                        return Ok(());
-                    },
-                    Obj::Symbol(s) if obj::get_symbol_str(s) == "letrec" => {
-                        let length = list_length(v).ok_or(anyhow!("malformed letrec: not list"))?;
-                        if length < 3 {
-                            Err(anyhow!("malformed letrec: length < 3"))?;
-                        }
-                        let binds = list_nth(v, 1).unwrap();
-                        opcodes.push(OpCode::PushNewFrame);
-                        opcodes.push(OpCode::PopAndSetFrame);
-                        for bind in bind_pair_iterator(binds.clone()) {
-                            let (symbol_id, _) = bind.map_err(|e| anyhow!("malformed letrec:{}", e))?;
-                            opcodes.push(OpCode::PushUndef);
-                            opcodes.push(OpCode::AddNewVarCurrent(symbol_id));
-                        }
-                        for bind in bind_pair_iterator(binds) {
-                            let (symbol_id, expr) = bind.map_err(|e| anyhow!("malformed letrec:{}", e))?;
-                            self.emit_rec(opcodes, &expr, false)?;
-                            opcodes.push(OpCode::SetVarCurrent(symbol_id));
-                        }
-                        // TODO: body have multiple expr
-                        let body = list_nth(v, 2).unwrap();
-                        self.emit_rec(opcodes, &body, tail)?;
-                        if !tail {
-                            opcodes.push(OpCode::SetFramePrevious);
-                        }
-                        return Ok(());
-                    },
-                    Obj::Symbol(s) if obj::get_symbol_str(s) == "lambda" => {
-                        let length = list_length(v).ok_or(anyhow!("malformed lambda: not list"))?;
-                        if length != 3 {
-                            Err(anyhow!("malformed lambda: length != 3"))?;
-                        }
-                        let args = list_nth(v, 1).unwrap();
-                        let body = list_nth(v, 2).unwrap();
-                        if list_length(&args) == None {
-                            return Err(anyhow!("emit error: args is not list"))
-                        }
-                        let func_id = {
-                            let mut opcodes = Vec::<OpCode>::new();
-                            for v in list_iterator(args) {
-                                if let Obj::Symbol(s) = v.unwrap().get_obj() {
-                                    opcodes.push(OpCode::CarCdr);
-                                    opcodes.push(OpCode::AddNewVarCurrent(s));
-                                } else {
-                                    return Err(anyhow!("emit error: args is not symbol"))
-                                }
-                            }
-                            self.emit_func(opcodes, &body)
-                        }?;
-                        opcodes.push(OpCode::Closure(func_id as FuncId));
-                        if tail {
-                            opcodes.push(OpCode::Ret);
-                        }
-                        return Ok(())
-                    },
-                    Obj::Symbol(s) if obj::get_symbol_str(s) == "if" => {
-                        let length = list_length(v).ok_or(anyhow!("malformed if: not list"))?;
-                        if length < 4 {
-                            Err(anyhow!("malformed if: length != 4"))?;
-                        }
-                        let cond = list_nth(v, 1).unwrap();
-                        let true_branch = list_nth(v, 2).unwrap();
-                        let false_branch = list_nth(v, 3).unwrap();
-                        self.emit_rec(opcodes, &cond, false)?;
-                        let jmp_if_false_addr = opcodes.len();
-                        opcodes.push(OpCode::Invalid);
-                        self.emit_rec(opcodes, &true_branch, tail)?;
-                        let jmp_addr = opcodes.len();
-                        if !tail {
-                            opcodes.push(OpCode::Invalid);
-                        }
-                        opcodes[jmp_if_false_addr] = OpCode::JmpIfFalse(opcodes.len());
-                        self.emit_rec(opcodes, &false_branch, tail)?;
-                        if !tail {
-                            opcodes[jmp_addr] = OpCode::Jmp(opcodes.len());
-                        }
-                        return Ok(())
-                    },
-                    Obj::Symbol(s) if obj::get_symbol_str(s) == "quote" => {
-                        let length = list_length(v).ok_or(anyhow!("malformed letrec: not list"))?;
-                        if length != 2 {
-                            Err(anyhow!("malformed if: length != 2"))?;
-                        }
-                        let quoted = list_nth(&v, 1).unwrap();
-                        let idx = self.consts.len();
-                        self.consts.push(quoted);
-                        opcodes.push(OpCode::PushConst(idx));
-                        if tail {
-                            opcodes.push(OpCode::Ret)
-                        }
-                        return Ok(())
-                    },
-                    _ => {},
-                }
-                self.emit_rec(opcodes, &cons.get_car(), false)?;
-                self.emit_cons(opcodes, &cons.get_cdr())?;
-                if tail {
-                    opcodes.push(OpCode::TailCall);
-                } else {
-                    opcodes.push(OpCode::Call);
-                }
-
-                Ok(())
-            },
-            _ => Err(anyhow!("cannot emit"))?
-        }
+            top_level_env: obj::frame::empty_frame().unwrap(),
+            natives: Vec::new(),
+        };
+        new_env.register_native_funcs().unwrap();
+        new_env
     }
 }
-
-
 
 type NativeFunc = fn(&mut Evaluator, OpaqueValue) -> Result<OpaqueValue>;
 
@@ -373,7 +194,6 @@ pub struct Evaluator<'a> {
     stack: Vec<OpaqueValue>,
     current_env: OpaqueValue, // envronment is list of list of pair (key(symbol), value)
     env: & 'a mut Environment,
-    natives: Vec<NativeFunc>,
     call_stack: Vec<CallStack>,
 }
 
@@ -397,24 +217,6 @@ impl<'a> Evaluator<'a> {
     }
     fn create_new_frame(&mut self) -> Result<OpaqueValue>{
         obj::frame::extend_frame(&self.current_env)
-    }
-    fn register_native_func(&mut self, name: &str, func: NativeFunc) -> Result<()> {
-        let symbol_id = obj::get_symbol_idx(name);
-        let idx = self.natives.len();
-        self.natives.push(func);
-        let val = obj::get_native(idx as u32);
-        self.add_new_var(self.current_env.clone(), symbol_id, val)
-    }
-    fn register_native_funcs(&mut self) -> Result<()> {
-        self.register_native_func("+", native_plus)?;
-        self.register_native_func("-", native_minus)?;
-        self.register_native_func("=", native_eq)?;
-        self.register_native_func("car", native_car)?;
-        self.register_native_func("cdr", native_cdr)?;
-        self.register_native_func("cons", native_cons)?;
-        self.register_native_func("null?", native_null_p)?;
-        self.register_native_func("write", native_write)?;
-        self.set_new_frame()
     }
     fn push_stack(&mut self, v: OpaqueValue) {
         self.stack.push(v)
@@ -442,20 +244,14 @@ impl<'a> Evaluator<'a> {
         Ok(())
     }
     pub fn eval(env: &mut Environment, func_id: usize) -> Result<OpaqueValue> {
-        let initial_env = obj::alloc_cons(
-            obj::get_nil(),
-            obj::get_nil()
-        )?;
         let mut evaluator = Evaluator {
             current_func_id: func_id,
             current_ip: 0,
             stack: Vec::new(),
-            current_env: initial_env,
-            env,
-            natives: Vec::new(),
+            current_env: env.top_level_env.clone(),
             call_stack: Vec::new(),
+            env,
         };
-        evaluator.register_native_funcs()?;
         loop {
             // eprintln!("func_id: {} ip:{} opcode:{:?}", evaluator.current_func_id, evaluator.current_ip, evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip]);
             // eprintln!("current_env: {}", obj::write_to_string(&evaluator.current_env.get_value()));
@@ -528,7 +324,7 @@ impl<'a> Evaluator<'a> {
                     let callee = evaluator.pop_stack().unwrap();
                     match callee.clone().get_obj() {
                         Obj::Native(i) => {
-                            let fun = evaluator.natives[i as usize];
+                            let fun = evaluator.env.natives[i as usize];
                             let retval = fun(&mut evaluator, args)?;
                             evaluator.push_stack(retval)
                         },
@@ -558,7 +354,7 @@ impl<'a> Evaluator<'a> {
                     let callee = evaluator.pop_stack().unwrap();
                     match callee.clone().get_obj() {
                         Obj::Native(i) => {
-                            let fun = evaluator.natives[i as usize];
+                            let fun = evaluator.env.natives[i as usize];
                             let retval = fun(&mut evaluator, args)?;
                             if let Some(call_stack) = evaluator.call_stack.pop() {
                                 evaluator.proc_ret(call_stack, retval)?;
@@ -624,7 +420,7 @@ mod tests {
     use anyhow::Result;
 
     fn assert_evaluated_to(env: &mut Environment, expr: &OpaqueValue, expected: &OpaqueValue) -> Result<()> {
-        let func_id = env.emit(&expr).unwrap();
+        let func_id = emit(env, &expr).unwrap();
         let result = Evaluator::eval(env, func_id)?;
         assert!(
             obj::equal(&result, &expected),
