@@ -29,6 +29,7 @@ enum OpCode {
     Cons, // stack: car cdr -> cons
     Ret, // stack: Retval ->
     JmpIfTruePreserve(usize), // stack: val -> val
+    JmpIfFalsePreserve(usize), // stack: val -> val
     JmpIfFalse(usize), // stack: val ->
     Jmp(usize), // stack: ->
     Discard, // stack: value ->
@@ -427,6 +428,13 @@ impl<'a> Evaluator<'a> {
                     let cond = evaluator.peek_stack()?;
                     if let Obj::False = cond.get_obj() {
                     } else {
+                        evaluator.current_ip = addr;
+                        continue;
+                    }
+                },
+                OpCode::JmpIfFalsePreserve(addr) => {
+                    let cond = evaluator.peek_stack()?;
+                    if let Obj::False = cond.get_obj() {
                         evaluator.current_ip = addr;
                         continue;
                     }

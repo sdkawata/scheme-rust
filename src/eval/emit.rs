@@ -231,14 +231,39 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                         if idx != 0 {
                             opcodes.push(OpCode::Discard)
                         }
-                        emit_rec(env, opcodes, &v.unwrap(), false)?;
                         if idx != length - 2 {
+                            emit_rec(env, opcodes, &v.unwrap(), false)?;
                             jmp_idxs.push(opcodes.len());
                             opcodes.push(OpCode::Invalid);
+                        } else {
+                            emit_rec(env, opcodes, &v.unwrap(), tail)?;
                         }
                     }
                     for idx in jmp_idxs {
                         opcodes[idx] = OpCode::JmpIfTruePreserve(opcodes.len());
+                    }
+                    if tail {
+                        opcodes.push(OpCode::Ret)
+                    }
+                    return Ok(())
+                },
+                Obj::Symbol(s) if obj::get_symbol_str(s) == "and" => {
+                    let length = list_length(v).ok_or(anyhow!("malformed and: not list"))?;
+                    let mut jmp_idxs = Vec::<usize>::new();
+                    for (idx, v) in list_iterator(v.to_owned()).skip(1).enumerate() {
+                        if idx != 0 {
+                            opcodes.push(OpCode::Discard)
+                        }
+                        if idx != length - 2 {
+                            emit_rec(env, opcodes, &v.unwrap(), false)?;
+                            jmp_idxs.push(opcodes.len());
+                            opcodes.push(OpCode::Invalid);
+                        } else {
+                            emit_rec(env, opcodes, &v.unwrap(), tail)?;
+                        }
+                    }
+                    for idx in jmp_idxs {
+                        opcodes[idx] = OpCode::JmpIfFalsePreserve(opcodes.len());
                     }
                     if tail {
                         opcodes.push(OpCode::Ret)
