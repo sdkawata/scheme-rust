@@ -28,8 +28,10 @@ enum OpCode {
     CarCdr, // stack: cons -> car cdr
     Cons, // stack: car cdr -> cons
     Ret, // stack: Retval ->
+    JmpIfTruePreserve(usize), // stack: val -> val
     JmpIfFalse(usize), // stack: val ->
     Jmp(usize), // stack: ->
+    Discard, // stack: value ->
     Invalid,
 }
 
@@ -421,6 +423,14 @@ impl<'a> Evaluator<'a> {
                     }
 
                 },
+                OpCode::JmpIfTruePreserve(addr) => {
+                    let cond = evaluator.peek_stack()?;
+                    if let Obj::False = cond.get_obj() {
+                    } else {
+                        evaluator.current_ip = addr;
+                        continue;
+                    }
+                },
                 OpCode::JmpIfFalse(addr) => {
                     let cond = evaluator.pop_stack()?;
                     if let Obj::False = cond.get_obj() {
@@ -431,6 +441,9 @@ impl<'a> Evaluator<'a> {
                 OpCode::Jmp(addr) => {
                     evaluator.current_ip = addr;
                     continue;
+                },
+                OpCode::Discard => {
+                    evaluator.pop_stack()?;
                 },
                 OpCode::Invalid => {
                     return Err(anyhow!("internal error: encounter invalid opcode"))

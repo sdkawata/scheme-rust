@@ -224,6 +224,44 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(())
                 },
+                Obj::Symbol(s) if obj::get_symbol_str(s) == "or" => {
+                    let length = list_length(v).ok_or(anyhow!("malformed or: not list"))?;
+                    let mut jmp_idxs = Vec::<usize>::new();
+                    for (idx, v) in list_iterator(v.to_owned()).skip(1).enumerate() {
+                        if idx != 0 {
+                            opcodes.push(OpCode::Discard)
+                        }
+                        emit_rec(env, opcodes, &v.unwrap(), false)?;
+                        if idx != length - 2 {
+                            jmp_idxs.push(opcodes.len());
+                            opcodes.push(OpCode::Invalid);
+                        }
+                    }
+                    for idx in jmp_idxs {
+                        opcodes[idx] = OpCode::JmpIfTruePreserve(opcodes.len());
+                    }
+                    if tail {
+                        opcodes.push(OpCode::Ret)
+                    }
+                    return Ok(())
+                },
+                Obj::Symbol(s) if obj::get_symbol_str(s) == "begin" => {
+                    let length = list_length(v).ok_or(anyhow!("malformed begin: not list"))?;
+                    for (idx, v) in list_iterator(v.to_owned()).skip(1).enumerate() {
+                        let body = v.unwrap();
+                        if idx == (length - 2) {
+                            emit_rec(env, opcodes, &body, tail)?;
+                        } else {
+                            emit_rec(env, opcodes, &body, false)?;
+                            opcodes.push(OpCode::Discard);
+                        }
+
+                    }
+                    if tail {
+                        opcodes.push(OpCode::Ret)
+                    }
+                    return Ok(())
+                },
                 _ => {},
             }
             emit_rec(env, opcodes, &cons.get_car(), false)?;
