@@ -21,6 +21,8 @@ peg::parser!{
     grammar scheme_parser() for str {
         rule number() -> Result<OpaqueValue>
             = n:$(['0'..='9'] ['0'..='9']*) { Ok(obj::get_i32(n.parse()?))}
+        rule float() -> Result<OpaqueValue>
+            = n:$(['0'..='9']+ "." ['0'..='9']*) { Ok(obj::get_f32(n.parse()?))}
         rule true_value() -> Result<OpaqueValue>
             = "#t" {Ok(obj::get_true())}
         rule false_value() -> Result<OpaqueValue>
@@ -64,7 +66,7 @@ peg::parser!{
                 )
             }
         rule value() -> Result<OpaqueValue>
-            = n:(number() / list() / symbol() / true_value() / false_value() / char() / quoted()) {n}
+            = n:(float() / number() / list() / symbol() / true_value() / false_value() / char() / quoted()) {n}
         pub rule values() -> Result<Vec<OpaqueValue>> 
             = _ l:(value() ** _) _ {l.into_iter().collect()}
         pub rule top() -> Result<OpaqueValue>

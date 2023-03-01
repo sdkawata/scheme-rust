@@ -9,6 +9,7 @@ pub use emit::emit;
 #[derive(Debug)]
 enum OpCode {
     PushI32(i32), // stack: -> I32,
+    PushF32(f32), // stack: -> f32,
     PushChar(char), // stack: -> char,
     PushTrue, // stack -> true
     PushFalse, // stack -> false
@@ -289,6 +290,9 @@ impl<'a> Evaluator<'a> {
             match evaluator.env.funcs[evaluator.current_func_id].opcodes[evaluator.current_ip] {
                 OpCode::PushI32(i) => {
                     evaluator.push_stack(obj::get_i32(i))
+                },
+                OpCode::PushF32(f) => {
+                    evaluator.push_stack(obj::get_f32(f))
                 },
                 OpCode::PushChar(c) => {
                     evaluator.push_stack(obj::get_char(c))

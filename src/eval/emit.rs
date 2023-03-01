@@ -67,6 +67,13 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
             }
             Ok(())
         },
+        Obj::F32(f) => {
+            opcodes.push(OpCode::PushF32(f));
+            if tail {
+                opcodes.push(OpCode::Ret);
+            }
+            Ok(())
+        },
         Obj::Symbol(s) => {
             opcodes.push(OpCode::LookUp(s));
             if tail {

@@ -22,6 +22,7 @@ enum ObjType {
 enum ValueType {
     Nil = 0,
     I32,
+    F32,
     True,
     False,
     Undef,
@@ -145,6 +146,7 @@ impl OpaqueValue {
                 let value_type = unsafe { raw_value.value_type() };
                 match value_type {
                     ValueType::I32 => Obj::I32(value as i32),
+                    ValueType::F32 => Obj::F32(unsafe {std::mem::transmute(value)}),
                     ValueType::Nil => Obj::Nil,
                     ValueType::Symbol => Obj::Symbol(value),
                     ValueType::Native => Obj::Native(value),
@@ -229,6 +231,7 @@ pub enum Obj {
     False,
     Undef,
     I32(i32),
+    F32(f32),
     Char(char),
     Native(NativeId),
     Symbol(SymbolId),
@@ -447,6 +450,9 @@ impl ObjPool {
 pub fn get_i32(i: i32) -> OpaqueValue {
     RawValue::from_value(i as u32, ValueType::I32).into()
 }
+pub fn get_f32(f: f32) -> OpaqueValue {
+    RawValue::from_value(unsafe {std::mem::transmute(f)}, ValueType::F32).into()
+}
 pub fn get_char(c: char) -> OpaqueValue {
     RawValue::from_value(c as u32, ValueType::Char).into()
 }
@@ -532,6 +538,7 @@ fn display_internal<W:Write>(w: &mut W, v: &OpaqueValue, display: bool) -> Resul
         Obj::False => {write!(w, "#f")?;}
         Obj::Undef => {write!(w, "#undef")?;}
         Obj::I32(i) => {write!(w, "{}",i)?;}
+        Obj::F32(f) => {write!(w, "{}",f)?;}
         Obj::Char(c) => {
             if display {
                 write!(w, "{}", c)?;
@@ -593,6 +600,7 @@ pub fn equal(v1: &OpaqueValue, v2: &OpaqueValue) -> bool {
         (Obj::False, Obj::False) => true,
         (Obj::Undef, Obj::Undef) => true,
         (Obj::I32(i1), Obj::I32(i2)) => i1 == i2,
+        (Obj::F32(f1), Obj::F32(f2)) => f1 == f2,
         (Obj::Char(c1), Obj::Char(c2)) => c1 == c2,
         (Obj::Nil, Obj::Nil) => true,
         (Obj::Symbol(s1), Obj::Symbol(s2)) => s1 == s2,
