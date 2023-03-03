@@ -52,8 +52,22 @@ peg::parser!{
                 }
                 Ok(res)
             }
-        rule symbol() -> Result<OpaqueValue>
-            = s:$(['a'..='z' | '+' | '=' | '?' | '-' | '_' | '*' | '/']+) {Ok(obj::get_symbol(s)?)}
+        rule ident() -> Result<OpaqueValue>
+            = s:$(initial_char() subsequent_char()* / peculier_ident()) {Ok(obj::get_symbol(s)?)}
+        rule peculier_ident() -> String
+            = s:$(("+" / "-" / "..." / "->") subsequent_char()*) {s.to_string()}
+        rule initial_char() -> char
+            = c:(constituent_char() / special_initial_char()) {c}
+        rule constituent_char() -> char
+            = c:(['a'..='z' | 'A'..='Z']) {c} // TODO: UNICODE
+        rule special_initial_char() -> char
+            = c:(['!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^' | '_' | '~']) {c}
+        rule subsequent_char() -> char
+            = c:(initial_char() / digit_char() / special_initial_char()) {c} // TODO: UNICODE
+        rule digit_char() -> char
+            = c:(['0'..='9']) {c}
+        rule special_subsequent_char() -> char
+            = c:(['+' | '-' | '.' | '@']) {c}
         rule quoted() -> Result<OpaqueValue> 
             = "'" _ v:value() {
                 let quote_symbol_idx = obj::get_symbol_idx("quote");
@@ -66,7 +80,7 @@ peg::parser!{
                 )
             }
         rule value() -> Result<OpaqueValue>
-            = n:(float() / number() / list() / symbol() / true_value() / false_value() / char() / quoted()) {n}
+            = n:(float() / number() / list() / ident() / true_value() / false_value() / char() / quoted()) {n}
         pub rule values() -> Result<Vec<OpaqueValue>> 
             = _ l:(value() ** _) _ {l.into_iter().collect()}
         pub rule top() -> Result<OpaqueValue>
