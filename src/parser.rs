@@ -53,7 +53,7 @@ peg::parser!{
                 Ok(res)
             }
         rule symbol() -> Result<OpaqueValue>
-            = s:$(['a'..='z' | '+' | '=' | '?' | '-' | '_' | '*']+) {Ok(obj::get_symbol(s)?)}
+            = s:$(['a'..='z' | '+' | '=' | '?' | '-' | '_' | '*' | '/']+) {Ok(obj::get_symbol(s)?)}
         rule quoted() -> Result<OpaqueValue> 
             = "'" _ v:value() {
                 let quote_symbol_idx = obj::get_symbol_idx("quote");

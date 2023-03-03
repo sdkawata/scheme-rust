@@ -139,6 +139,7 @@ enum ValueOrPtr {
 pub struct OpaqueValue(ValueOrPtr);
 
 impl OpaqueValue {
+    #[inline]
     pub fn get_obj(self) -> Obj {
         match self.0 {
             ValueOrPtr::Value(raw_value) => {
@@ -163,6 +164,28 @@ impl OpaqueValue {
                     ObjType::Forwarded => Obj::Forwarded(OpaqueValueForwarded(ptr)),
                 }
             }
+        }
+    }
+    pub fn is_i32(&self) -> bool {
+        if let ValueOrPtr::Value(v) = self.0 {
+            if unsafe {v.value_type()} == ValueType::I32 {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+    pub fn is_f32(&self) -> bool {
+        if let ValueOrPtr::Value(v) = self.0 {
+            if unsafe {v.value_type()} == ValueType::F32 {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
         }
     }
     fn as_raw_value(&self) -> RawValue {

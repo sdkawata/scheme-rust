@@ -61,6 +61,7 @@ impl Environment {
         self.register_native_func("+", native_plus)?;
         self.register_native_func("*", native_times)?;
         self.register_native_func("-", native_minus)?;
+        self.register_native_func("/", native_div)?;
         self.register_native_func("=", native_eq)?;
         self.register_native_func("car", native_car)?;
         self.register_native_func("cdr", native_cdr)?;
@@ -86,54 +87,65 @@ impl Environment {
 
 type NativeFunc = fn(&mut Evaluator, OpaqueValue) -> Result<OpaqueValue>;
 
-fn native_plus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
-    let mut result = obj::get_i32(0);
-    for n in list_iterator(v) {
-        if let Ok(num_value) = n {
-            match (result.get_obj(), num_value.get_obj()) {
-                (Obj::I32(i), Obj::I32(j)) => {result = obj::get_i32(i+j)}
-                _ => {return Err(anyhow!("+ error:non-number given"))}
+fn must_as_i32(v:OpaqueValue) -> i32 {
+    match v.get_obj() {
+        Obj::I32(i) => i,
+        _ => unreachable!(),
+    }
+}
+
+fn must_as_f32(v:OpaqueValue) -> f32 {
+    match v.get_obj() {
+        Obj::I32(i) => i as f32,
+        Obj::F32(f) => f,
+        _ => unreachable!(),
+    }
+} 
+
+#[inline]
+fn numeric_binary_operator<F:Fn(i32,i32)->i32, F2:Fn(f32,f32) -> f32>
+    (v: OpaqueValue, initial: Option<OpaqueValue>, name: &str, f_i32: F, f_f32:F2) -> Result<OpaqueValue> {
+    let mut iter = list_iterator(v);
+    let mut result = match initial {
+        Some(v) => v,
+        None => match iter.next() {
+            Some(Ok(v)) if (v.is_i32() || v.is_f32()) => v,
+            Some(Ok(_)) => {return Err(anyhow!("{} error: arg type not numeric", name));}
+            Some(_) => {return Err(anyhow!("{} error: arg is not list", name));}
+            None => {return Err(anyhow!("{} error: arg len < 1", name));}
+        }
+    };
+    for n in iter  {
+        if let Ok(v) = n {
+            if !v.is_f32() && !v.is_i32() {
+                return Err(anyhow!("{} error: arg type not numeric", name));
+            }
+            if result.is_i32() && v.is_i32() {
+                result = obj::get_i32(f_i32(must_as_i32(result), must_as_i32(v)))
+            } else {
+                result = obj::get_f32(f_f32(must_as_f32(result), must_as_f32(v)))
             }
         } else {
-            return Err(anyhow!("+ error: non-list given"))
+            return Err(anyhow!("{} error: arg len < 1", name));
         }
     }
     Ok(result)
+}
+
+fn native_plus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    numeric_binary_operator(v, Some(obj::get_i32(0)), "+", |i,j|{i+j}, |i,j|{i+j})
 }
 
 fn native_times(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
-    let mut result = obj::get_i32(1);
-    for n in list_iterator(v) {
-        if let Ok(num_value) = n {
-            match (result.get_obj(), num_value.get_obj()) {
-                (Obj::I32(i), Obj::I32(j)) => {result = obj::get_i32(i*j)}
-                _ => {return Err(anyhow!("* error:non-number given"))}
-            }
-        } else {
-            return Err(anyhow!("* error: non-list given"))
-        }
-    }
-    Ok(result)
+    numeric_binary_operator(v, Some(obj::get_i32(1)), "*", |i,j|{i*j}, |i,j|{i*j})
 }
 
 fn native_minus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
-    if list_length(&v).ok_or_else(||anyhow!("= error: args not list"))? < 2 {
-        return Err(anyhow!("= error: length < 2"))
-    }
-    let head = list_nth(&v, 0).unwrap();
-    let mut result = match head.clone().get_obj() {
-        Obj::I32(_) => head,
-        _ => {return Err(anyhow!("- error: not number"))}
-    };
-    for tail in list_iterator(v).skip(1) {
-        match (result.get_obj(), tail.unwrap().get_obj()) {
-            (Obj::I32(i), Obj::I32(j)) => {
-                result = obj::get_i32(i-j);
-            }
-            _ => {return Err(anyhow!("= error:cannot compare"))}
-        }
-    }
-    Ok(result)
+    numeric_binary_operator(v, None, "-", |i,j|{i-j}, |i,j|{i-j})
+}
+
+fn native_div(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    numeric_binary_operator(v, None, "/", |i,j|{i/j}, |i,j|{i/j})
 }
 
 fn native_eq(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
