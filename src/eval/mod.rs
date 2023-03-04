@@ -1,6 +1,7 @@
 use std::io::{Write, stdout};
 use crate::obj;
-use crate::obj::{OpaqueValue, Obj, list_iterator, list_nth, list_length, FuncId};
+use crate::obj::list::ElemOrTail;
+use crate::obj::{OpaqueValue, Obj, list::list_iterator, list::list_nth, list::list_length, FuncId};
 use obj::symbol::Symbol;
 use anyhow::{Result, anyhow};
 
@@ -110,14 +111,14 @@ fn numeric_binary_operator<F:Fn(i32,i32)->i32, F2:Fn(f32,f32) -> f32>
     let mut result = match initial {
         Some(v) => v,
         None => match iter.next() {
-            Some(Ok(v)) if (v.is_i32() || v.is_f32()) => v,
-            Some(Ok(_)) => {return Err(anyhow!("{} error: arg type not numeric", name));}
+            Some(ElemOrTail::Elem(v)) if (v.is_i32() || v.is_f32()) => v,
+            Some(ElemOrTail::Elem(_)) => {return Err(anyhow!("{} error: arg type not numeric", name));}
             Some(_) => {return Err(anyhow!("{} error: arg is not list", name));}
             None => {return Err(anyhow!("{} error: arg len < 1", name));}
         }
     };
     for n in iter  {
-        if let Ok(v) = n {
+        if let ElemOrTail::Elem(v) = n {
             if !v.is_f32() && !v.is_i32() {
                 return Err(anyhow!("{} error: arg type not numeric", name));
             }
@@ -155,7 +156,7 @@ fn native_eq(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> 
     }
     let head_obj = list_nth(&v, 0).unwrap().get_obj();
     for tail in list_iterator(v).skip(1) {
-        match (head_obj.clone(), tail.unwrap().get_obj()) {
+        match (head_obj.clone(), tail.expect_elem().unwrap().get_obj()) {
             (Obj::I32(i), Obj::I32(j)) => {
                 if i != j {
                     return Ok(obj::get_false())
@@ -509,10 +510,10 @@ mod tests {
         let parsed = parser::parse(&tests,).unwrap();
         obj::set_force_gc_every_alloc(true);
         for pair in list_iterator(parsed) {
-            let pair = pair.unwrap();
-            let expr = obj::list_nth(&pair, 0).unwrap();
+            let pair = pair.expect_elem().unwrap();
+            let expr = obj::list::list_nth(&pair, 0).unwrap();
             // eprintln!("evaluating {}", obj::write_to_string(&expr.get_value()));
-            let expected = obj::list_nth(&pair, 1).unwrap();
+            let expected = obj::list::list_nth(&pair, 1).unwrap();
             assert_evaluated_to(&mut env, &expr, &expected).map_err(|err|
                 anyhow!("error evaluating {}:{}", obj::write_to_string(&expr), err)
             ).unwrap();

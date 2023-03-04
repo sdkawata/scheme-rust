@@ -1,4 +1,4 @@
-use super::*;
+use super::{*, list::list_iterator};
 use anyhow::Result;
 
 pub fn extend_frame(frame: &OpaqueValue) -> Result<OpaqueValue> {
@@ -63,9 +63,9 @@ pub fn add_new_var(frame: OpaqueValue, s: Symbol, v: OpaqueValue) -> Result<()> 
 
 pub fn set_var(frame: OpaqueValue, s: Symbol, v: OpaqueValue) -> Result<()> {
     for frame in list_iterator(frame.clone()) {
-        let frame = frame.unwrap();
+        let frame = frame.expect_elem().unwrap();
         for pair in list_iterator(frame) {
-            if let Obj::Cons(cons) = pair.unwrap().get_obj() {
+            if let Obj::Cons(cons) = pair.expect_elem().unwrap().get_obj() {
                 if let Obj::Symbol(symbol) = cons.get_car().get_obj() {
                     if symbol == s {
                         cons.set_cdr(v);

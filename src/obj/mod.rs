@@ -10,6 +10,7 @@ use self::symbol::Symbol;
 
 pub mod frame;
 pub mod symbol;
+pub mod list;
 
 #[repr(C)]
 #[derive(Clone,Copy, Debug, PartialEq, Eq)]
@@ -168,9 +169,9 @@ impl OpaqueValue {
             }
         }
     }
-    pub fn is_i32(&self) -> bool {
+    fn is_value_type(&self, value_type: ValueType) -> bool {
         if let ValueOrPtr::Value(v) = self.0 {
-            if unsafe {v.value_type()} == ValueType::I32 {
+            if unsafe {v.value_type()} == value_type {
                 true
             } else {
                 false
@@ -179,16 +180,14 @@ impl OpaqueValue {
             false
         }
     }
+    pub fn is_i32(&self) -> bool {
+        self.is_value_type(ValueType::I32)
+    }
     pub fn is_f32(&self) -> bool {
-        if let ValueOrPtr::Value(v) = self.0 {
-            if unsafe {v.value_type()} == ValueType::F32 {
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
+        self.is_value_type(ValueType::F32)
+    }
+    pub fn is_nil(&self) -> bool {
+        self.is_value_type(ValueType::Nil)
     }
     fn as_raw_value(&self) -> RawValue {
         match &self.0 {
@@ -606,59 +605,7 @@ pub fn equal(v1: &OpaqueValue, v2: &OpaqueValue) -> bool {
     }
 }
 
-struct ListIterator {
-    current: OpaqueValue
-}
 
-impl Iterator for ListIterator {
-    type Item = Result<OpaqueValue>;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.current.to_owned().get_obj() {
-            Obj::Cons(cons) => {
-                let car = cons.get_car();
-                self.current = cons.get_cdr();
-                Some(Ok(car))
-            },
-            Obj::Nil => None,
-            _ => {
-                self.current = get_nil();
-                Some(Err(anyhow!("not list")))
-            }
-        }
-    }
-}
-
-pub fn list_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<OpaqueValue>> {
-    ListIterator{current: v}
-}
-
-pub fn list_length(v: &OpaqueValue) -> Option<usize> {
-    let mut current = v.clone();
-    let mut current_size:usize = 0;
-    loop {
-        match current.get_obj() {
-            Obj::Nil => {return Some(current_size)}
-            Obj::Cons(cons) => {
-                current_size+=1;
-                current = cons.get_cdr()
-            },
-            _ => {return None}
-        }
-    }
-}
-
-pub fn list_nth(v: &OpaqueValue, idx: usize) -> Option<OpaqueValue> {
-    match v.to_owned().get_obj() {
-        Obj::Cons(ref cons) => {
-            if idx == 0 {
-                Some(cons.get_car())
-            } else {
-                list_nth(&cons.get_cdr(), idx-1)
-            }
-        }
-        _ => None
-    }
-}
 
 #[cfg(test)]
 mod tests {

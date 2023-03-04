@@ -1,4 +1,4 @@
-use crate::obj::{OpaqueValue, list_iterator, Obj, list_nth, list_length, self, FuncId};
+use crate::obj::{OpaqueValue, list::list_iterator, Obj, list::list_nth, list::{list_length, list_skip_n}, self, FuncId};
 use obj::symbol::Symbol;
 
 use super::{Environment, OpCode, Func};
@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow};
 
 fn bind_pair_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<(Symbol, OpaqueValue)>> {
     list_iterator(v).map(|bind| {
-        let bind = bind.map_err(|_| anyhow!("bind pair is not list"))?;
+        let bind = bind.expect_elem().map_err(|_| anyhow!("bind pair is not list"))?;
         if list_length(&bind) != Some(2) {
             Err(anyhow!("bind is not list of length 2"))?;
         }
@@ -28,7 +28,7 @@ fn emit_func(env:&mut Environment, args: &OpaqueValue, v: &OpaqueValue) -> Resul
     }
     let mut opcodes = Vec::<OpCode>::new();
     for v in list_iterator(args.to_owned()) {
-        if let Obj::Symbol(s) = v.unwrap().get_obj() {
+        if let Obj::Symbol(s) = v.expect_elem().unwrap().get_obj() {
             opcodes.push(OpCode::CarCdr);
             opcodes.push(OpCode::AddNewVarCurrent(s));
         } else {
@@ -36,6 +36,28 @@ fn emit_func(env:&mut Environment, args: &OpaqueValue, v: &OpaqueValue) -> Resul
         }
     }
     emit_rec(env, &mut opcodes, v, true)?;
+    let idx = env.funcs.len();
+    // eprintln!("{:?}", &opcodes);
+    env.funcs.push(Func{
+        opcodes
+    });
+    Ok(idx)
+}
+
+fn emit_func_multi_statement(env:&mut Environment, args: &OpaqueValue, v: &OpaqueValue) -> Result<usize> {
+    if list_length(args) == None {
+        return Err(anyhow!("emit error: args is not list"))
+    }
+    let mut opcodes = Vec::<OpCode>::new();
+    for v in list_iterator(args.to_owned()) {
+        if let Obj::Symbol(s) = v.expect_elem().unwrap().get_obj() {
+            opcodes.push(OpCode::CarCdr);
+            opcodes.push(OpCode::AddNewVarCurrent(s));
+        } else {
+            return Err(anyhow!("emit error: args is not symbol"))
+        }
+    }
+    emit_body(env, &mut opcodes, v, true)?;
     let idx = env.funcs.len();
     // eprintln!("{:?}", &opcodes);
     env.funcs.push(Func{
@@ -58,6 +80,30 @@ fn emit_cons(env: &mut Environment, opcodes: &mut Vec<OpCode>, v:&OpaqueValue) -
         _ => Err(anyhow!("expected list: non-list given"))
     }
 }
+
+fn emit_body(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, tail: bool) -> Result<()> {
+    let mut current = v.to_owned();
+    while ! current.is_nil() {
+        if let Obj::Cons(cons) = current.get_obj() {
+            let v = cons.get_car();
+            current = cons.get_cdr();
+            if current.is_nil() {
+                // last element
+                emit_rec(env, opcodes, &v, tail)?;
+                if tail {
+                    opcodes.push(OpCode::Ret);
+                }
+            } else {
+                emit_rec(env, opcodes, &v, false)?;
+                opcodes.push(OpCode::Discard);
+            }
+        } else {
+            return Err(anyhow!("body is not list"));
+        }
+    }
+    Ok(())
+}
+
 fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, tail: bool) -> Result<()> {
     // eprintln!("emit_rec v:{} tail:{}", obj::write_to_string(v), tail);
     match v.to_owned().get_obj() {
@@ -118,8 +164,8 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                         opcodes.push(OpCode::AddNewVarCurrent(symbol_id));
                     } else if let Obj::Cons(cons) = list_nth(v, 1).unwrap().get_obj() {
                         if let Obj::Symbol(symbol_id) = cons.get_car().get_obj() {
-                            let body = list_nth(v, 2).unwrap();
-                            let func_id = emit_func(env, &cons.get_cdr(), &body)?;
+                            let body = list_skip_n(v, 2).unwrap();
+                            let func_id = emit_func_multi_statement(env, &cons.get_cdr(), &body)?;
                             opcodes.push(OpCode::Closure(func_id as FuncId));
                             opcodes.push(OpCode::AddNewVarCurrent(symbol_id));
                         } else {  
@@ -240,11 +286,11 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                             opcodes.push(OpCode::Discard)
                         }
                         if idx != length - 2 {
-                            emit_rec(env, opcodes, &v.unwrap(), false)?;
+                            emit_rec(env, opcodes, &v.expect_elem().unwrap(), false)?;
                             jmp_idxs.push(opcodes.len());
                             opcodes.push(OpCode::Invalid);
                         } else {
-                            emit_rec(env, opcodes, &v.unwrap(), tail)?;
+                            emit_rec(env, opcodes, &v.expect_elem().unwrap(), tail)?;
                         }
                     }
                     for idx in jmp_idxs {
@@ -263,11 +309,11 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                             opcodes.push(OpCode::Discard)
                         }
                         if idx != length - 2 {
-                            emit_rec(env, opcodes, &v.unwrap(), false)?;
+                            emit_rec(env, opcodes, &v.expect_elem().unwrap(), false)?;
                             jmp_idxs.push(opcodes.len());
                             opcodes.push(OpCode::Invalid);
                         } else {
-                            emit_rec(env, opcodes, &v.unwrap(), tail)?;
+                            emit_rec(env, opcodes, &v.expect_elem().unwrap(), tail)?;
                         }
                     }
                     for idx in jmp_idxs {
@@ -281,7 +327,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                 Obj::Symbol(s) if s.as_str() == "begin" => {
                     let length = list_length(v).ok_or(anyhow!("malformed begin: not list"))?;
                     for (idx, v) in list_iterator(v.to_owned()).skip(1).enumerate() {
-                        let body = v.unwrap();
+                        let body = v.expect_elem().unwrap();
                         if idx == (length - 2) {
                             emit_rec(env, opcodes, &body, tail)?;
                         } else {
