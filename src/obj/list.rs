@@ -9,7 +9,7 @@ impl ElemOrTail {
     pub fn expect_elem(self) -> Result<OpaqueValue> {
         match self {
             Self::Elem(v) => Ok(v),
-            Self::Tail(v) => Err(anyhow!("not list")),
+           _ => Err(anyhow!("not list")),
         }
     }
 }
