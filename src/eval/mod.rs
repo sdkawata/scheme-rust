@@ -1,6 +1,7 @@
 use std::io::{Write, stdout};
 use crate::obj;
-use crate::obj::{OpaqueValue, Obj, SymbolId, list_iterator, list_nth, list_length, FuncId};
+use crate::obj::{OpaqueValue, Obj, list_iterator, list_nth, list_length, FuncId};
+use obj::symbol::Symbol;
 use anyhow::{Result, anyhow};
 
 mod emit;
@@ -16,10 +17,10 @@ enum OpCode {
     PushUndef, // stack -> undef
     PushConst(usize), // stack -> const
     PushNil, // stack: -> nil
-    LookUp(SymbolId), // stack: -> value
-    AddNewVar(SymbolId), // stack: frame value -> frame
-    AddNewVarCurrent(SymbolId), // stack: value ->
-    SetVarCurrent(SymbolId), // stack: value ->
+    LookUp(Symbol), // stack: -> value
+    AddNewVar(Symbol), // stack: frame value -> frame
+    AddNewVarCurrent(Symbol), // stack: value ->
+    SetVarCurrent(Symbol), // stack: value ->
     PushNewFrame, // stack: -> frame
     PopAndSetFrame, // stack: frame ->
     SetFramePrevious,
@@ -51,11 +52,11 @@ pub struct Environment {
 
 impl Environment {
     fn register_native_func(&mut self, name: &str, func: NativeFunc) -> Result<()> {
-        let symbol_id = obj::get_symbol_idx(name);
+        let symbol = obj::symbol::from_str(name);
         let idx = self.natives.len();
         self.natives.push(func);
         let val = obj::get_native(idx as u32);
-        obj::frame::add_new_var(self.top_level_env.clone(), symbol_id, val)
+        obj::frame::add_new_var(self.top_level_env.clone(), symbol, val)
     }
     fn register_native_funcs(&mut self) -> Result<()> {
         self.register_native_func("+", native_plus)?;
@@ -241,13 +242,13 @@ pub struct Evaluator<'a> {
 }
 
 impl<'a> Evaluator<'a> {
-    fn lookup(&self, s:SymbolId) -> Option<OpaqueValue> {
+    fn lookup(&self, s:Symbol) -> Option<OpaqueValue> {
         obj::frame::lookup(s, &self.current_env)
     }
-    fn add_new_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
+    fn add_new_var(&mut self, frame: OpaqueValue, s: Symbol, v: OpaqueValue) -> Result<()> {
         obj::frame::add_new_var(frame,s,v)
     }
-    fn set_var(&mut self, frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
+    fn set_var(&mut self, frame: OpaqueValue, s: Symbol, v: OpaqueValue) -> Result<()> {
         obj::frame::set_var(frame,s,v)
     }
     fn set_frame_previous(&mut self) -> Result<()> {
@@ -326,7 +327,7 @@ impl<'a> Evaluator<'a> {
                 },
                 OpCode::LookUp(s) => {
                     // eprintln!("{}", obj::write_to_string(&evaluator.current_env));
-                    let value = evaluator.lookup(s).ok_or_else(|| anyhow!("undefined symbol: {}", obj::get_symbol_str(s)))?;
+                    let value = evaluator.lookup(s).ok_or_else(|| anyhow!("undefined symbol: {}", s.as_str()))?;
                     evaluator.push_stack(value)
                 },
                 OpCode::AddNewVar(s) => {

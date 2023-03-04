@@ -1,9 +1,10 @@
-use crate::obj::{OpaqueValue, SymbolId, list_iterator, Obj, list_nth, list_length, self, FuncId};
+use crate::obj::{OpaqueValue, list_iterator, Obj, list_nth, list_length, self, FuncId};
+use obj::symbol::Symbol;
 
 use super::{Environment, OpCode, Func};
 use anyhow::{Result, anyhow};
 
-fn bind_pair_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<(SymbolId, OpaqueValue)>> {
+fn bind_pair_iterator(v: OpaqueValue) -> impl Iterator<Item=Result<(Symbol, OpaqueValue)>> {
     list_iterator(v).map(|bind| {
         let bind = bind.map_err(|_| anyhow!("bind pair is not list"))?;
         if list_length(&bind) != Some(2) {
@@ -105,7 +106,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
         Obj::Cons(cons) => {
             let car = cons.get_car();
             match car.get_obj() {
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "define" => {
+                Obj::Symbol(s) if s.as_str() == "define" => {
                     let length = list_length(v).ok_or(anyhow!("malformed define: not list"))?;
                     if length < 3 {
                         Err(anyhow!("malformed define: length < 3"))?;
@@ -133,7 +134,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(())
                 },
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "let" => {
+                Obj::Symbol(s) if s.as_str() == "let" => {
                     let length = list_length(v).ok_or(anyhow!("malformed let: not list"))?;
                     if length < 3 {
                         Err(anyhow!("malformed let: length < 3"))?;
@@ -154,7 +155,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(());
                 },
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "letrec" => {
+                Obj::Symbol(s) if s.as_str() == "letrec" => {
                     let length = list_length(v).ok_or(anyhow!("malformed letrec: not list"))?;
                     if length < 3 {
                         Err(anyhow!("malformed letrec: length < 3"))?;
@@ -180,7 +181,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(());
                 },
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "lambda" => {
+                Obj::Symbol(s) if s.as_str() == "lambda" => {
                     let length = list_length(v).ok_or(anyhow!("malformed lambda: not list"))?;
                     if length != 3 {
                         Err(anyhow!("malformed lambda: length != 3"))?;
@@ -194,7 +195,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(())
                 },
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "if" => {
+                Obj::Symbol(s) if s.as_str() == "if" => {
                     let length = list_length(v).ok_or(anyhow!("malformed if: not list"))?;
                     if length < 4 {
                         Err(anyhow!("malformed if: length != 4"))?;
@@ -217,7 +218,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(())
                 },
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "quote" => {
+                Obj::Symbol(s) if s.as_str() == "quote" => {
                     let length = list_length(v).ok_or(anyhow!("malformed letrec: not list"))?;
                     if length != 2 {
                         Err(anyhow!("malformed if: length != 2"))?;
@@ -231,7 +232,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(())
                 },
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "or" => {
+                Obj::Symbol(s) if s.as_str() == "or" => {
                     let length = list_length(v).ok_or(anyhow!("malformed or: not list"))?;
                     let mut jmp_idxs = Vec::<usize>::new();
                     for (idx, v) in list_iterator(v.to_owned()).skip(1).enumerate() {
@@ -254,7 +255,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(())
                 },
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "and" => {
+                Obj::Symbol(s) if s.as_str() == "and" => {
                     let length = list_length(v).ok_or(anyhow!("malformed and: not list"))?;
                     let mut jmp_idxs = Vec::<usize>::new();
                     for (idx, v) in list_iterator(v.to_owned()).skip(1).enumerate() {
@@ -277,7 +278,7 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                     }
                     return Ok(())
                 },
-                Obj::Symbol(s) if obj::get_symbol_str(s) == "begin" => {
+                Obj::Symbol(s) if s.as_str() == "begin" => {
                     let length = list_length(v).ok_or(anyhow!("malformed begin: not list"))?;
                     for (idx, v) in list_iterator(v.to_owned()).skip(1).enumerate() {
                         let body = v.unwrap();

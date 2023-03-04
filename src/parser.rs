@@ -20,9 +20,9 @@ pub fn parse_char(s: &str) -> Result<char> {
 peg::parser!{
     grammar scheme_parser() for str {
         rule number() -> Result<OpaqueValue>
-            = n:$(['0'..='9'] ['0'..='9']*) { Ok(obj::get_i32(n.parse()?))}
+            = n:$("-"? ['0'..='9'] ['0'..='9']*) { Ok(obj::get_i32(n.parse()?))}
         rule float() -> Result<OpaqueValue>
-            = n:$(['0'..='9']+ "." ['0'..='9']*) { Ok(obj::get_f32(n.parse()?))}
+            = n:$("-"? ['0'..='9']+ "." ['0'..='9']*) { Ok(obj::get_f32(n.parse()?))}
         rule true_value() -> Result<OpaqueValue>
             = "#t" {Ok(obj::get_true())}
         rule false_value() -> Result<OpaqueValue>
@@ -53,7 +53,7 @@ peg::parser!{
                 Ok(res)
             }
         rule ident() -> Result<OpaqueValue>
-            = s:$(initial_char() subsequent_char()* / peculier_ident()) {Ok(obj::get_symbol(s)?)}
+            = s:$(initial_char() subsequent_char()* / peculier_ident()) {Ok(obj::get_symbol_from_str(s))}
         rule peculier_ident() -> String
             = s:$(("+" / "-" / "..." / "->") subsequent_char()*) {s.to_string()}
         rule initial_char() -> char
@@ -70,13 +70,12 @@ peg::parser!{
             = c:(['+' | '-' | '.' | '@']) {c}
         rule quoted() -> Result<OpaqueValue> 
             = "'" _ v:value() {
-                let quote_symbol_idx = obj::get_symbol_idx("quote");
                 let cons = obj::alloc_cons(
                     v?,
                     obj::get_nil()
                 )?;
                 Ok(
-                    obj::alloc_cons(obj::get_symbol_from_idx(quote_symbol_idx), cons)?
+                    obj::alloc_cons(obj::get_symbol_from_str("quote"), cons)?
                 )
             }
         rule value() -> Result<OpaqueValue>
@@ -176,8 +175,8 @@ mod tests {
     #[test]
     fn parse_symbol() {
         let value = parse("if").unwrap();
-        if let Obj::Symbol(sym_idx) = value.get_obj() {
-            assert_eq!("if", obj::get_symbol_str(sym_idx))
+        if let Obj::Symbol(s) = value.get_obj() {
+            assert_eq!("if", s.as_str())
         } else {
             panic!("unexpected")
         }
@@ -186,8 +185,8 @@ mod tests {
     fn parse_list() {
         let value = parse("(if 2)").unwrap();
         if let Obj::Cons(cons) = value.get_obj() {
-            if let Obj::Symbol(sym_idx) = cons.get_car().get_obj() {  
-                assert_eq!("if", obj::get_symbol_str(sym_idx))
+            if let Obj::Symbol(s) = cons.get_car().get_obj() {  
+                assert_eq!("if", s.as_str())
             } else {panic!("unexpected")}
             if let Obj::Cons(cons2) = cons.get_cdr().get_obj() {  
                 if let Obj::I32(2) = cons2.get_car().get_obj() {} else {panic!("unexpected")}

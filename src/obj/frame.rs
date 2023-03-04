@@ -5,7 +5,7 @@ pub fn extend_frame(frame: &OpaqueValue) -> Result<OpaqueValue> {
     Ok(alloc_cons(get_nil(), frame.clone())?)
 }
 
-pub fn lookup(s: SymbolId, frame: &OpaqueValue) -> Option<OpaqueValue> {
+pub fn lookup(s: Symbol, frame: &OpaqueValue) -> Option<OpaqueValue> {
     // eprintln!("frame:{}", write_to_string(frame));
     unsafe {
         let mut current_frame: RawValue = frame.as_raw_value();
@@ -27,7 +27,7 @@ pub fn lookup(s: SymbolId, frame: &OpaqueValue) -> Option<OpaqueValue> {
                             let ptr = pair.as_ptr::<ObjCons>();
                             let car = (*ptr).car;
                             if car.is_value() && car.value_type() == ValueType::Symbol {
-                                if car.value() == s {
+                                if car.value() == s.0 {
                                     return Some((*ptr).cdr.into())
                                 }
                             } else {
@@ -48,10 +48,10 @@ pub fn lookup(s: SymbolId, frame: &OpaqueValue) -> Option<OpaqueValue> {
     }
 }
 
-pub fn add_new_var(frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
+pub fn add_new_var(frame: OpaqueValue, s: Symbol, v: OpaqueValue) -> Result<()> {
     if let Obj::Cons(cons) = frame.clone().get_obj() {
         let top_frame = cons.get_car();
-        let new_pair = alloc_cons(get_symbol_from_idx(s), v)?;
+        let new_pair = alloc_cons(get_symbol(s), v)?;
         let new_top_frame = alloc_cons(new_pair, top_frame)?;
         cons.set_car(new_top_frame);
         // println!("env: {}", pool.write_to_string(&self.current_env));
@@ -61,13 +61,13 @@ pub fn add_new_var(frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()
     }
 }
 
-pub fn set_var(frame: OpaqueValue, s: SymbolId, v: OpaqueValue) -> Result<()> {
+pub fn set_var(frame: OpaqueValue, s: Symbol, v: OpaqueValue) -> Result<()> {
     for frame in list_iterator(frame.clone()) {
         let frame = frame.unwrap();
         for pair in list_iterator(frame) {
             if let Obj::Cons(cons) = pair.unwrap().get_obj() {
-                if let Obj::Symbol(symbol_id) = cons.get_car().get_obj() {
-                    if symbol_id == s {
+                if let Obj::Symbol(symbol) = cons.get_car().get_obj() {
+                    if symbol == s {
                         cons.set_cdr(v);
                         return Ok(())
                     }

@@ -1,13 +1,15 @@
 use std::cell::RefCell;
 use std::char::from_u32_unchecked;
-use std::collections::HashMap;
 use std::alloc::{GlobalAlloc, System, Layout};
 use std::io::Write;
 use std::ptr::NonNull;
 use anyhow::{Result, anyhow};
 use std::mem::size_of;
 
+use self::symbol::Symbol;
+
 pub mod frame;
+pub mod symbol;
 
 #[repr(C)]
 #[derive(Clone,Copy, Debug, PartialEq, Eq)]
@@ -33,7 +35,7 @@ enum ValueType {
 
 type Value = u64;
 pub type NativeId = u32;
-pub type SymbolId = u32;
+
 pub type FuncId = u32;
 #[repr(C)]
 struct ObjHead {
@@ -149,7 +151,7 @@ impl OpaqueValue {
                     ValueType::I32 => Obj::I32(value as i32),
                     ValueType::F32 => Obj::F32(unsafe {std::mem::transmute(value)}),
                     ValueType::Nil => Obj::Nil,
-                    ValueType::Symbol => Obj::Symbol(value),
+                    ValueType::Symbol => Obj::Symbol(Symbol(value as symbol::SymbolId)),
                     ValueType::Native => Obj::Native(value),
                     ValueType::True => Obj::True,
                     ValueType::False => Obj::False,
@@ -257,7 +259,7 @@ pub enum Obj {
     F32(f32),
     Char(char),
     Native(NativeId),
-    Symbol(SymbolId),
+    Symbol(Symbol),
     Cons(OpaqueValueCons),
     Closure(OpaqueValueClosure),
     Forwarded(OpaqueValueForwarded),
@@ -327,8 +329,6 @@ struct ObjPool {
     from_space: *mut u8,
     to_space: *mut u8,
     pool_size: usize,
-    symbols: Vec<String>,
-    symbols_map: HashMap<String, SymbolId>,
     head_entry: NonNull<PtrNode>,
     tail_entry: NonNull<PtrNode>,
     pub disable_gc: bool,
@@ -359,8 +359,6 @@ impl ObjPool {
             from_space: ptr,
             to_space: unsafe { ptr.add(size)},
             pool_size: size,
-            symbols: Vec::new(),
-            symbols_map: HashMap::new(),
             head_entry,
             tail_entry,
             disable_gc: false,
@@ -454,19 +452,6 @@ impl ObjPool {
         }
         //eprintln!("end_gc current_size:{}", self.current as usize - self.from_space as usize);
     }
-    fn get_symbol_str(&self, idx: SymbolId) -> String {
-        self.symbols[idx as usize].to_owned()
-    }
-    fn get_symbol_idx(&mut self, str: &str) -> SymbolId {
-        if let Some(idx) = self.symbols_map.get(str) {
-            *idx
-        } else {
-            let idx = self.symbols.len() as SymbolId;
-            self.symbols.push(str.to_owned());
-            self.symbols_map.insert(str.to_owned(), idx);
-            idx
-        }
-    }
 }
 
 
@@ -478,6 +463,12 @@ pub fn get_f32(f: f32) -> OpaqueValue {
 }
 pub fn get_char(c: char) -> OpaqueValue {
     RawValue::from_value(c as u32, ValueType::Char).into()
+}
+pub fn get_symbol(s: Symbol) -> OpaqueValue {
+    RawValue::from_value(s.0 as u32, ValueType::Symbol).into()
+}
+pub fn get_symbol_from_str(s: &str) -> OpaqueValue {
+    RawValue::from_value(symbol::from_str(s).0 as u32, ValueType::Symbol).into()
 }
 pub fn get_native(i: NativeId) -> OpaqueValue {
     RawValue::from_value(i as u32, ValueType::Native).into()
@@ -526,16 +517,6 @@ pub fn alloc_closure(func_id: FuncId, env: OpaqueValue) -> Result<OpaqueValue> {
     })
 }
 
-pub fn get_symbol_str(idx: SymbolId) -> String {
-    OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_str(idx))
-}
-pub fn get_symbol_from_idx(idx: SymbolId) -> OpaqueValue {
-    RawValue::from_value(idx, ValueType::Symbol).into()
-}
-pub fn get_symbol_idx(str: &str) -> SymbolId {
-    OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_idx(str))
-}
-
 pub fn display_to_string(v: &OpaqueValue) -> String {
     display_to_string_internal(v, true)
 }
@@ -570,7 +551,7 @@ fn display_internal<W:Write>(w: &mut W, v: &OpaqueValue, display: bool) -> Resul
             }
         }
         Obj::Native(i) => {write!(w, "#native:{}#", i)?;}
-        Obj::Symbol(s) => {write!(w, "{}", OBJ_POOL.with(|obj_pool| obj_pool.borrow_mut().get_symbol_str(s)))?;}
+        Obj::Symbol(s) => {write!(w, "{}", s.as_str())?;}
         Obj::Cons(_) => {display_list(w, v)?;}
         Obj::Closure(_) => {write!(w, "#closure#")?;}
         Obj::Forwarded(_) => {write!(w, "#forwarded#")?;}
@@ -601,13 +582,6 @@ fn display_list<W:Write>(w: &mut W, v: &OpaqueValue) -> Result<()> {
     }
     write!(w, ")")?;
     Ok(())
-}
-
-pub fn get_symbol(str: &str) -> Result<OpaqueValue> {
-    OBJ_POOL.with(|obj_pool| {
-        let idx = obj_pool.borrow_mut().get_symbol_idx(str);
-        Ok(get_symbol_from_idx(idx))
-    })
 }
 
 pub fn set_disable_gc(disable_gc: bool) {
@@ -729,9 +703,9 @@ mod tests {
     }
     #[test]
     fn can_alloc_string() {
-        let value = get_symbol("test").unwrap();
-        if let Obj::Symbol(sym_idx) = value.get_obj() {
-            assert_eq!(get_symbol_str(sym_idx), "test".to_string())
+        let value = get_symbol_from_str("test");
+        if let Obj::Symbol(s) = value.get_obj() {
+            assert_eq!(s.as_str(), "test".to_string())
         } else {
             panic!("unexpected")
         }
@@ -739,11 +713,11 @@ mod tests {
     #[test]
     fn can_alloc_cons() {
         let nil = get_nil();
-        let str = get_symbol("test").unwrap();
+        let str = get_symbol_from_str("test");
         let value = alloc_cons(str, nil).unwrap();
         if let Obj::Cons(cons) = value.get_obj() {
-            if let Obj::Symbol(sym_idx) = cons.get_car().get_obj() {
-                assert_eq!(get_symbol_str(sym_idx), "test".to_string())
+            if let Obj::Symbol(s) = cons.get_car().get_obj() {
+                assert_eq!(s.as_str(), "test".to_string())
             } else {
                 panic!("unexpected")
             }
