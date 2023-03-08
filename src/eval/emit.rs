@@ -229,12 +229,12 @@ fn emit_rec(env: &mut Environment, opcodes: &mut Vec<OpCode>, v: &OpaqueValue, t
                 },
                 Obj::Symbol(s) if s.as_str() == "lambda" => {
                     let length = list_length(v).ok_or(anyhow!("malformed lambda: not list"))?;
-                    if length != 3 {
-                        Err(anyhow!("malformed lambda: length != 3"))?;
+                    if length < 3 {
+                        Err(anyhow!("malformed lambda: length < 3"))?;
                     }
                     let args = list_nth(v, 1).unwrap();
-                    let body = list_nth(v, 2).unwrap();
-                    let func_id = emit_func(env, &args, &body)?;
+                    let body = list_skip_n(v, 2).unwrap();
+                    let func_id = emit_func_multi_statement(env, &args, &body)?;
                     opcodes.push(OpCode::Closure(func_id as FuncId));
                     if tail {
                         opcodes.push(OpCode::Ret)

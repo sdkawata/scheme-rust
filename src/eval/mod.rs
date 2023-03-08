@@ -64,6 +64,7 @@ impl Environment {
         self.register_native_func("*", native_times)?;
         self.register_native_func("-", native_minus)?;
         self.register_native_func("/", native_div)?;
+        self.register_native_func(">", native_gt)?;
         self.register_native_func("=", native_eq)?;
         self.register_native_func("car", native_car)?;
         self.register_native_func("cdr", native_cdr)?;
@@ -102,7 +103,11 @@ fn must_as_f32(v:OpaqueValue) -> f32 {
         Obj::F32(f) => f,
         _ => unreachable!(),
     }
-} 
+}
+
+fn is_numeric(v:&OpaqueValue) ->bool {
+    v.is_f32() || v.is_i32()
+}
 
 #[inline]
 fn numeric_binary_operator<F:Fn(i32,i32)->i32, F2:Fn(f32,f32) -> f32>
@@ -111,7 +116,7 @@ fn numeric_binary_operator<F:Fn(i32,i32)->i32, F2:Fn(f32,f32) -> f32>
     let mut result = match initial {
         Some(v) => v,
         None => match iter.next() {
-            Some(ElemOrTail::Elem(v)) if (v.is_i32() || v.is_f32()) => v,
+            Some(ElemOrTail::Elem(v)) if (is_numeric(&v)) => v,
             Some(ElemOrTail::Elem(_)) => {return Err(anyhow!("{} error: arg type not numeric", name));}
             Some(_) => {return Err(anyhow!("{} error: arg is not list", name));}
             None => {return Err(anyhow!("{} error: arg len < 1", name));}
@@ -119,7 +124,7 @@ fn numeric_binary_operator<F:Fn(i32,i32)->i32, F2:Fn(f32,f32) -> f32>
     };
     for n in iter  {
         if let ElemOrTail::Elem(v) = n {
-            if !v.is_f32() && !v.is_i32() {
+            if !is_numeric(&v) {
                 return Err(anyhow!("{} error: arg type not numeric", name));
             }
             if result.is_i32() && v.is_i32() {
@@ -148,6 +153,37 @@ fn native_minus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValu
 
 fn native_div(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
     numeric_binary_operator(v, None, "/", |i,j|{i/j}, |i,j|{i/j})
+}
+
+fn native_gt(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
+    let mut iter = list_iterator(v);
+    let mut previous = if let Some(ElemOrTail::Elem(v)) = iter.next() {
+        v
+    } else {
+        return Err(anyhow!("> error: arg len < 2"))
+    };
+    if !previous.is_f32() && !previous.is_i32() {
+        return Err(anyhow!("> error: not numeric"))
+    }
+    for v in iter {
+        if let ElemOrTail::Elem(v) = v {
+            if ! is_numeric(&v) {
+                return Err(anyhow!("> error: non-numeric value given"))
+            }
+            if previous.is_i32() && v.is_i32() {
+                if must_as_i32(previous.clone()) <= must_as_i32(v.clone()) {
+                    return Ok(obj::get_false())
+                }
+            } else {
+                if must_as_f32(previous.clone()) <= must_as_f32(v.clone()) {
+                    return Ok(obj::get_false())
+                }
+            }
+        } else {
+            return Err(anyhow!("> error: not list"))
+        }
+    }
+    Ok(obj::get_true())
 }
 
 fn native_eq(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
