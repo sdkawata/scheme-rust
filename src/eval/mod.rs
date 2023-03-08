@@ -165,10 +165,16 @@ fn native_gt(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> 
     if !previous.is_f32() && !previous.is_i32() {
         return Err(anyhow!("> error: not numeric"))
     }
+    if previous.is_f32() && must_as_f32(previous.clone()).is_nan() {
+        return Ok(obj::get_false())
+    }
     for v in iter {
         if let ElemOrTail::Elem(v) = v {
             if ! is_numeric(&v) {
                 return Err(anyhow!("> error: non-numeric value given"))
+            }
+            if v.is_f32() && must_as_f32(v.clone()).is_nan() {
+                return Ok(obj::get_false())
             }
             if previous.is_i32() && v.is_i32() {
                 if must_as_i32(previous.clone()) <= must_as_i32(v.clone()) {
