@@ -148,7 +148,23 @@ fn native_times(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValu
 }
 
 fn native_minus(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
-    numeric_binary_operator(v, None, "-", |i,j|{i-j}, |i,j|{i-j})
+    let length = if let Some(len) = list_length(&v) {
+        len
+    } else {
+        return Err(anyhow!("- error: args not list"))
+    };
+    if length == 1 {
+        let first = list_nth(&v, 0).unwrap();
+        if first.is_f32() {
+            Ok(obj::get_f32(- must_as_f32(first)))
+        } else if first.is_i32() {
+            Ok(obj::get_i32(- must_as_i32(first)))
+        } else {
+            return Err(anyhow!("- error: non-numeric value"))
+        }
+    } else {
+        numeric_binary_operator(v, None, "-", |i,j|{i-j}, |i,j|{i-j})
+    }
 }
 
 fn native_div(_evaluator: &mut Evaluator, v: OpaqueValue) -> Result<OpaqueValue> {
